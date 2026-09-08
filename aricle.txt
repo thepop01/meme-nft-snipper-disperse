@@ -1,0 +1,173 @@
+If you have ever tried to mint any hyped NFT in FCFS allowlist phase on Opensea, you know the pain. You are fully ready there, refreshing the page and by the time you click "Mint" button it is already minted out. Some users minted before you.
+
+Now, if it were a public mint, the fix would be simple, encode the calldata locally, sign a transaction offline and fire it the tx instantly when the mint goes live. No server dependency, no waiting. But allowlist mints on OpenSea doesn't work this way. They use mintSigned function which requires a server-generated salt and signature that only OpenSea's backend can generate. Without these 2 crucial stuffs, u can't build the whole calldata beforehand.
+
+So u are stuck in a trap, u need to be the fastest to send a tx but you can't even build that transaction until OpenSea's server hands you the missing pieces. Every second you spend waiting for that response is a second someone else is already on-chain.
+
+So I asked myself, what if I could reverse engineer exactly how OpenSea's frontend fetches that signature, strip away all the browser overhead and fire the transaction from raw Rust with zero wasted time?
+
+This is how it all started.
+
+OpenSea's frontend is a Next.js app. The JavaScript is split across dozens of webpack chunks : minified, hashed and spread across multiple files. If you have ever tried to read minified code, you know the feeling. It looks like noise but buried in that noise, the GraphQL queries are sitting right there in plain text. You just have to know what to search for.
+
+Chunk 008d99104100f8fb.js
+This was the big find. Inside this chunk, I found the full GraphQL operation definitions for the minting flow.
+
+–
+MintActionTimelineQuery : this is the core one. This is what actually fetches the calldata for minting. It calls swap() with action : MINT and returns transactionSubmissionData containing the target contract, the encoded calldata (with the salt and signature baked in) and the ETH value (mint price).
+–
+MintQuery : fetches collection metadata, drop identifiers, chain info. This is what populates the mint page before you click anything.
+The `swap()` query was the key, it's how the frontend tells OpenSea backend "this wallet wants to mint this NFT on this chain." I could see exactly what parameters it passes :
+
+plaintext
+
+Copy
+swap(
+  address: $address
+  fromAssets: [{ asset: { chain: "base", contractAddress: "0x0000...0000" } }]
+  toAssets: [{ asset: { chain: "base", contractAddress: "0xNFT...", tokenId: "0" }, quantity: "1" }]
+  action: MINT
+  capabilities: { eip7702: false }
+)
+You pass in the wallet address, the NFT contract, the chain, the quantity, and OpenSea does the rest. It responds with a ready-to-use transaction calldata that can be used directly to call Opensea contract.
+
+But figuring out what the response actually looks like wasn't straightforward cuz this query was in one chunk, but the part that defines the response shape was imported from a completely different module (332238). So I had to follow the import trail into another file, dig through more minified code, and finally piece together the actual structure :
+
+json
+
+Copy
+{
+  "actions": [{
+    "__typename": "TransactionAction",
+    "transactionSubmissionData": {
+      "to": "0x...",
+      "data": "0x...",
+      "value": "0"
+    }
+  }],
+  "errors": []
+}
+This `data` field is what we all need for minting FCFS NFT. It contains the complete calldata, the server-generated salt, the ECDSA signature from OpenSea's signer and all the `mintSigned` parameters encoded together.
+
+You don't even need to construct this yourself. So, Without hitting OpenSea's `swap()` query first, we can't get the calldata for minting anyhow.
+
+So now I had the query shape and the response format. The next question was simple , where do I actually send this query?
+
+Private vs Public API of Opensea
+OpenSea actually has 2 GraphQL endpoints:
+
+•
+api.opensea.io/graphql : the public API, requires an API key and most importantly, it doesn't expose the swap/mint queries at all.
+•
+gql.opensea.io/graphql : this is the internal frontend API, authenticated via cookies, no API key and it is what actually behind the every mints on the opensea.
+The public API is useless for minting. All the operations I needed, the swap query, drop stage fetching, eligibility checking, only live on the internal endpoint. This is what the frontend calls, and this is what my bot (script) had to call. But that meant I needed to figure out how to authenticate to it the same way the browser does.
+
+Chunk b79ea595ce2a7c5b.js
+From the network tab I could see the internal endpoint uses cookie-based auth. But how does the frontend get those cookies in the first place?
+
+Chunk b79ea595ce2a7c5b had the answer. This is where OpenSea implements their SIWE (Sign-In With Ethereum) flow. Reading through the minified code, I found several critical details like :
+
+•
+The SIWE message uses "wants you to sign in with your account:" not "Ethereum account" like the standard SIWE spec often shows. 1 wrong word and the server rejects you silently.
+•
+The URI field is encodeURI("https://opensea.io/"), note the trailing slash, If u miss it, verification fails.
+•
+The wallet address is passed lowercase, as-is from the wallet. No checksum encoding.
+•
+After signing, the frontend calls a function I could see referenced as d(message) which parses the signed SIWE string back into individual fields. The verify endpoint doesn't receive the raw signed message, it receives the parsed fields as a JSON object.
+This last point was lil hard to figure out. I was sending the raw signed message string to the verify endpoint for few mins and was getting silent 400 error. Then I traced through the chunk and realized that the frontend deconstructs the message, sends each field individually (domain, address, statement, uri, version, chainId, nonce, issuedAt), plus the signature, chainArch: "EVM", and connectorId: "injected".
+
+Once I matched this exactly, authentication worked and Opensea server returns access_token and refresh_token in Set-Cookie headers with a ~3.5 day max-age.
+
+Even after authentication was working, my GraphQL requests kept failing. I had valid cookies, correct query, proper content-type but still rejected by server. Then, I opened Chrome DevTools, copied the exact headers my browser was sending and compared them with mine one by one.
+
+The missing piece was -> x-app-id: os2-web. One header that identifies the request as coming from the web client.
+
+Once I added that, along with content-type: application/json and the usual browser headers (origin, referer, user-agent) to make my requests look like they are coming from a real browser. My bot was now talking to OpenSea's internal API the same way their own website does.
+
+Building the Bot
+Once I had the full scenario of queries, auth, endpoints, it was time to actually build the thing. Ill walk through the decisions I made, in the order they happen when a mint runs.
+
+I chose Rust. Not because it's trendy, but because when you're fighting for milliseconds, you can't afford a language that adds runtime overhead. Rust compiles to native code, gives me direct control over memory and lets me use C libraries (like libsecp256k1 for signing) through FFI with zero wrapper cost. Every microsecond matters in this game.
+
+From where to run the script
+Before writing any bot logic, I needed to figure out where to run it. It doesn't matter how fast your code is if your server is on the wrong continent.
+
+I ran dig and curl against both endpoints I'd be talking to : gql.opensea.io (where I fetch calldata) and mainnet-preconf.base.org (where I send transactions, I tested on base mainnet basically). Both sit behind Cloudflare. When I checked the CF-Ray response headers, both consistently route through IAD, Cloudflare's Ashburn, Virginia datacenter.
+
+So I put my bot in the same region.
+
+•
+~8ms ping to gql.opensea.io
+•
+~7ms ping to mainnet-preconf.base.org
+•
+~80ms total round-trip for a full GraphQL swap query (connect + TLS + request + response)
+If I were running this from Europe or Asia, that 80ms would be 200-400ms. On a hot FCFS mint, that is the difference between landing in block N and block N+1. You can optimize code all day, but physics wins and the only way to beat it is to be closer.
+
+Sequences during or before the mint
+Now let me walk through what happens when the bot runs a mint, step by step.
+
+STEP 1 > Auto-Scheduling : Finding the Mint details
+
+First, the bot needs to know when to fire. It queries OpenSea's dropBySlug GraphQL query to get the drop's stage timing, start times, stage indexes, labels. Then it sleeps, polling every 30 seconds for schedule changes. If the drop creator pushes the time back by 5 minutes, the bot sees it on the next poll and adjusts automatically.
+
+I can set it up, walk away and come back to results. I don't even need to change our schedule if the drop creator changes mint time later.
+
+STEP 2 > Warm-Up Phase : Pre-Computing Everything
+
+The general approach is : wait for mint time, fetch calldata, build transaction, sign, send. But every step in that chain adds latency. So I front-load everything I possibly can.
+
+Five seconds before mint, the warm-up phase kicks in :
+
+•
+Nonce pre-fetching : Every wallet's current nonce is fetched from the RPC and cached. This runs concurrently across all wallets. When it's time to fire, there's zero RPC delay for nonces.
+•
+Chain ID verification : Confirmed once, cached forever. No reason to ask the RPC "what chain is this?" at fire time.
+•
+HTTP connection warming : The bot sends keepalive pings to both the OpenSea endpoint and the RPC during the sleep period. HTTP/2 connections go cold if unused. By keeping them warm, the first real request doesn't pay a connection setup penalty.
+The warm-up is fault-tolerant. If a wallet's nonce fetch fails, that wallet gets skipped, not the entire batch. If the whole warm-up fails, the bot falls back to live fetching at fire time. The mint still fires. Just slightly slower. The design principle is : never abort entirely. Always degrade gracefully.
+
+STEP 3 > Calldata Fetch : Hammering the Endpoint Early
+
+Starting 1.5 seconds before mint time, the bot enters a tight retry loop hitting OpenSea's swap() query. Most drops go live on their exact scheduled second. By hammering the endpoint slightly early, the moment OpenSea starts returning valid calldata (meaning the salt and signature are now available), it's cached and ready. No waiting.
+
+Here is something I have not seen anyone else do, I batch all wallets into a single GraphQL request using field aliasing :
+
+plaintext
+
+Copy
+query B {
+  w0: swap(address: "0xWallet0", ...) { ...fields }
+  w1: swap(address: "0xWallet1", ...) { ...fields }
+  w2: swap(address: "0xWallet2", ...) { ...fields }
+}
+Most bots I have seen either send one request per wallet (slow) or fire them all concurrently (gets you rate-limited). This is neither. It is one HTTP round-trip, one POST, and OpenSea returns all the calldata at once. I named the query "B" which is short, no wasted bytes. Each wallet's result comes back under its alias (w0, w1, etc.), so mapping results back to addresses is trivial.
+
+With 50+ wallets, this alone saved hundreds of milliseconds. That's the kind of edge you get from actually reading how GraphQL works.
+
+Not every wallet in a batch will succeed. OpenSea returns per-alias errors :
+
+•
+Balance errors (InsufficientFund) : that wallet gets skipped, no retry
+•
+Transient errors (DropNotMintingError) mean the mint isn't live yet : the bot retries the whole batch
+If at least one wallet succeeded, the batch continues. Individual failures don't kill the run.
+
+STEP 4 > Sign and Send :
+
+By the time the mint goes live, everything is ready. Nonces are cached. Connections are hot. Calldata is fetched. The only remaining work is pure CPU :
+
+–
+Build the transaction : Use the cached nonce, the calldata from OpenSea, the gas parameters from config (don't estimate gas in the hot path)
+–
+Sign it : I use direct C FFI bindings to libsecp256k1 instead of the pure Rust k256 crate. The C library is roughly 1.8x faster which is about 70 microseconds per signature
+–
+Send it : fire eth_sendRawTransaction to the RPC
+STEP 5 > Confirmation :
+
+On Base, I use the base_transactionStatus RPC method. It tells you whether your transaction is "Unknown", "Known" or "Preconfirmed" without waiting for a full receipt. The moment the status flips to "Known", I switch to receipt polling. The moment the receipt lands, I record how long it took and the mint is done.
+
+Everything came from reading minified JavaScript that was never meant to be read. None of it is documented. None of it is stable. OpenSea can change their chunks, their auth flow or their query structure with a single deploy. But the skill of figuring things out when there's no documentation, that doesn't break when the chunks change.
+
+Hope this helped you learn something. That's what it's here for.

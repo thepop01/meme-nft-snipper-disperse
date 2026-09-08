@@ -1,0 +1,36 @@
+import 'dotenv/config';
+
+export const config = {
+  port: Number(process.env.PORT) || 4517,
+  apiToken: process.env.API_TOKEN || '',
+  databaseUrl: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/tradeforge',
+  rpcUrl: process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
+  wssUrl: process.env.WSS_URL || 'wss://api.mainnet-beta.solana.com',
+  dryRun: process.env.DRY_RUN !== 'false',
+  liveTradingEnabled: process.env.LIVE_TRADING_ENABLED === 'true',
+  allowServerSigner: process.env.ALLOW_SERVER_SIGNER === 'true',
+  maxTradeSol: Number(process.env.MAX_TRADE_SOL) || 1,
+  walletSecretKey: process.env.WALLET_SECRET_KEY || '',
+  priorityFeeMicrolamports: Number(process.env.PRIORITY_FEE_MICROLAMPORTS) || 100000,
+  jitoTipLamports: Number(process.env.JITO_TIP_LAMPORTS) || 0,
+  collection: {
+    baselineWindowMs: 5 * 60_000,
+    baselineMinSwaps: 30,
+    stageBMinBuys: 5,
+    hotLimit: 200,
+    controlSampleRate: 0.07,
+  },
+  structuralEvidence: {
+    version: 'structural-evidence-v1',
+    concurrency: 3,
+    maxRequestsPerMinute: 90,
+    funderLookbackMs: 24 * 60 * 60_000,
+    freshAgeMs: 72 * 60 * 60_000,
+    freshBoundary: [20, 60],
+    baseRates: { prior: 0.2 },
+    shrinkStrength: 5,
+    devConfidentN: 8,
+    rugWindowMs: 60 * 60_000,
+  },
+  monitoring: { horizonMs: 6 * 3600_000, aggregateRetentionMs: 30 * 24 * 3600_000 },
+};

@@ -1,0 +1,32 @@
+{
+  "networks": {
+    "ethereum": {
+      "rpcUrl": "https://eth.llamarpc.com",
+      "tokens": {
+        "USDC": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "USDT": "0xdac17f958d2ee523a2206206994597c13d831ec7"
+      }
+    },
+    "bsc": {
+      "rpcUrl": "https://binance.llamarpc.com",
+      "tokens": {
+        "USDC": "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
+        "USDT": "0x55d398326f99059fF775485246999027B3197955"
+      }
+    },
+    "sepolia": {
+      "rpcUrl": "https://rpc.sepolia.org",
+      "tokens": {
+        "USDC": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+        "USDT": "0x7169D38820dfd117C3FA1f22a697dBA58d90BBA6"
+      }
+    },
+    "bsc_testnet": {
+      "rpcUrl": "https://data-seed-prebsc-1-s1.binance.org:8545/",
+      "tokens": {
+        "USDC": "0x64544969ed7EBf5f083679233325356EbE738930",
+        "USDT": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd"
+      }
+    }
+  }
+}

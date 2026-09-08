@@ -1,0 +1,3 @@
+export function rankTokens(tokens) { return [...tokens].sort((a, b) => (b.score?.memeScore ?? -1) - (a.score?.memeScore ?? -1) || (b.score?.asOf ?? 0) - (a.score?.asOf ?? 0)); }
+export function paginate(tokens, { page = 1, pageSize = 50 } = {}) { const safePage = Math.max(1, Number(page) || 1); const safeSize = Math.min(300, Math.max(1, Number(pageSize) || 50)); return { total: tokens.length, page: safePage, pageSize: safeSize, tokens: tokens.slice((safePage - 1) * safeSize, safePage * safeSize) }; }
+export function toEvidenceView(token) { return { assetKey: token.assetKey, admission: token.admission, score: token.score ?? null, alert: token.alert ?? null, reasons: token.score?.reasons ?? token.reasons ?? [] }; }

@@ -1,0 +1,70 @@
+# TradeForge bot stack — isolated from the `poly` compose project:
+#   different project name (bot), own network (bot_default), own ports.
+#
+#   poly:  postgres 5432, redis 6379
+#   bot:   frontend 3080, backend 4600, postgres 5434
+# (5433 is taken on this machine by another postgres; only the host-side
+# mapping changed — containers still talk postgres:5432 internally.)
+#
+# Both stacks can run simultaneously.
+
+name: bot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bot-postgres
+    environment:
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: bot_password
+      POSTGRES_DB: bot_tape
+    ports:
+      - "5434:5432"
+    volumes:
+      - bot_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user -d bot_tape"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  backend:
+    build: ./backend
+    container_name: bot-backend
+    ports:
+      - "4600:4517"
+    environment:
+      PORT: "4517"
+      API_TOKEN: ${API_TOKEN:-}
+      DATABASE_URL: postgres://bot_user:bot_password@postgres:5432/bot_tape
+      RPC_URL: https://api.mainnet-beta.solana.com
+      WSS_URL: wss://api.mainnet-beta.solana.com
+      DRY_RUN: "true"
+      NFT_DRY_RUN: "true"
+      PRIORITY_FEE_MICROLAMPORTS: "100000"
+      OPENSEA_API_KEY: ${OPENSEA_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # .env mounted read-only for extra keys (dotenv never overrides the env above)
+      - ./backend/.env:/app/.env:ro
+      # durable JSON stores (bots, positions, tokens, jobs…)
+      - bot_backend_data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_BACKEND_URL: ""   # same-origin; nginx proxies /api and /ws to backend
+    container_name: bot-frontend
+    ports:
+      - "3080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  bot_pgdata:
+  bot_backend_data:

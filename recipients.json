@@ -1,0 +1,10 @@
+[
+  {
+    "address": "0xYourRecipientAddress1Here",
+    "amount": "1.5"
+  },
+  {
+    "address": "0xYourRecipientAddress2Here",
+    "amount": "2.0"
+  }
+]

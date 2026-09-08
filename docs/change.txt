@@ -1,0 +1,393 @@
+I’ll validate the time-sensitive claims first, especially Robinhood Chain status, Solana Token-2022 behavior, and launchpad/LP mechanics. Then I’ll separate what is solid, what is heuristic rather than consensus, and what I would change in an implementable sniper pipeline.Broadly, yes. The architecture is right: **fast hard rejects, asynchronous soft signals, continuous post-entry risk monitoring, and separate Solana/EVM adapters**. The strongest parts are the emphasis on distribution, funding graphs, deployer history, bundle unwind, and exit logic.
+
+I would change several details.
+
+**1. Treat thresholds as hypotheses, not consensus**
+
+Values such as `top-10 < 15–25%`, `bundled < 30%`, `MC/liquidity < 10–15x`, `>100 holders in 5 minutes`, and `buy/sell >70%` are useful starting points, but they are not portable across:
+
+- bonding curve versus AMM launches
+- token age
+- launchpad
+- SOL market regime
+- pool depth
+- token size and intended order size
+- migration status
+
+Store the raw measurements and calibrate thresholds using forward returns and survival outcomes. Do not encode only pass/fail decisions.
+
+For example, `top10 = 22%` means something very different when:
+
+- the top wallets are unrelated organic buyers
+- one cluster owns 20%
+- the bonding curve account is included
+- the token has 30 holders versus 3,000 holders
+- the top holders are already net sellers
+
+Use adjusted metrics:
+
+```text
+top10_excluding_protocol_accounts
+top10_cluster_adjusted
+largest_independent_holder
+largest_cluster
+holder_concentration_velocity
+```
+
+**2. Correct the Solana authority model**
+
+The mint and freeze checks are important, but “mint authority must be null” is not sufficient. Also inspect:
+
+- authority history, not just current authority
+- metadata update authority
+- metadata mutability
+- Token-2022 withheld-fee authority
+- close authority where relevant
+- default account state
+- permanent delegate
+- transfer hook program
+- confidential transfer configuration
+- account-level frozen state
+
+Token-2022 extensions are not automatically malicious. They are capability flags. Some are legitimate for regulated or restricted assets, while permanent delegate, transfer hook, non-transferable, default-frozen, and nonzero transfer fee should normally be rejected for an unrestricted memecoin. Solana’s documentation confirms that these extensions can give a mint transfer hooks, global delegate powers, transfer fees, or frozen default accounts. ([solana.com](https://solana.com/docs/tokens/extensions?utm_source=openai))
+
+The scanner should produce an explicit capability report rather than a single “Token-2022 = bad” flag.
+
+**3. Separate bonding-curve risk from pool risk**
+
+The liquidity section mixes two different launch models.
+
+For a pump.fun-style bonding curve, the relevant checks are:
+
+- curve progress
+- virtual and real reserves
+- creator allocation
+- protocol migration destination
+- migration state
+- buyer concentration
+- expected price impact
+- post-migration liquidity depth
+
+For a raw AMM pool, the relevant checks are:
+
+- pool authority
+- LP ownership
+- withdrawability
+- token transfer restrictions
+- pool initialization provenance
+- liquidity depth
+- price impact
+- whether the creator can add/remove liquidity
+
+Pump.fun documents that graduation closes the bonding curve and atomically migrates liquidity to PumpSwap; the liquidity pool is protocol-owned rather than creator-owned. That is materially different from an arbitrary Raydium or Meteora pool. ([pump.fun](https://pump.fun/docs/bonding-curve?utm_source=openai))
+
+I would not use “LP burned” as a universal requirement. Verify the actual pool program and whether liquidity can be withdrawn. A burned LP token is useful evidence, but the economic question is whether anyone capable of rugging can remove the liquidity.
+
+**4. Do not treat “migrated” as inherently bullish**
+
+Migration proves that the token reached the graduation condition. It does not prove:
+
+- organic demand
+- safe distribution
+- sustainable liquidity
+- absence of coordinated sellers
+- that the post-migration pool is deep enough for your order
+
+Migration should be a **state transition**, not a positive score by itself. Measure the first few post-migration blocks:
+
+```text
+post_migration_buy_pressure
+migration_selloff
+new_unique_buyers
+price_impact_at_target_size
+liquidity_depth
+creator_and_bundle_wallet_netflow
+```
+
+A token that migrates and immediately loses 30% of its liquidity-adjusted price is not safer merely because it graduated.
+
+**5. Replace raw “bundled percentage” with a wallet-cluster model**
+
+This is one of the most important improvements.
+
+A same-slot purchase is evidence of coordination, not proof of a harmful bundle. Conversely, a sophisticated operator can distribute buys across slots and funding paths.
+
+Build a graph with:
+
+- SOL transfers
+- token transfers
+- common funders
+- wallet creation timing
+- repeated transaction sizes
+- shared programs and routes
+- common first-funder ancestry
+- synchronized buys and sells
+- historical co-occurrence across launches
+
+Then calculate:
+
+```text
+cluster_supply_pct
+cluster_count
+largest_cluster_pct
+cluster_sell_pressure
+funding_graph_depth
+coordination_confidence
+```
+
+Also distinguish between:
+
+- unsold coordinated supply
+- coordinated supply already distributed
+- coordinated wallets that are net sellers
+- known independent sniper wallets
+
+Jito bundles are atomic, sequential transaction groups and are submitted through a block-engine auction, so bundle-related analysis should distinguish actual bundle inclusion from ordinary same-slot activity. ([docs.jito.wtf](https://docs.jito.wtf/lowlatencytxnsend/?utm_source=openai))
+
+**6. Add a mandatory execution-risk layer**
+
+Your model evaluates whether a token is safe enough, but not whether your transaction can execute safely.
+
+Add hard or near-hard checks for:
+
+- quote freshness
+- blockhash age
+- transaction simulation
+- account creation requirements
+- compute-unit margin
+- priority-fee budget
+- expected landing probability
+- maximum acceptable price movement between quote and landing
+- failed-transaction rate
+- RPC disagreement
+- duplicate or stale pool state
+
+The entry decision should be:
+
+```text
+expected_edge
+- fees
+- priority_fee
+- slippage
+- failure_cost
+- adverse_selection
+- exit_cost
+```
+
+not simply “score passed.”
+
+For small pools, a token can pass every security filter and still have negative expected value because the round-trip cost is too high.
+
+**7. Sell simulation needs stronger caveats**
+
+A simulated sell is useful, but it is not a complete honeypot test.
+
+On Solana, simulation may miss:
+
+- state changes between simulation and landing
+- insufficient pool liquidity after your buy
+- account-specific restrictions
+- dynamic transfer behavior
+- route-specific failures
+- token-account state changes
+
+On EVM, a successful `eth_call` does not guarantee that the transaction will succeed after another transaction changes state. Re-simulating while holding is sensible, but pair it with:
+
+- executable exit-size checks
+- current pool reserves
+- max-loss emergency exit
+- allowance and approval monitoring
+- tax-change monitoring
+- owner/proxy/admin event monitoring
+
+For EVM tokens, “owner renounced” should not be a primary safety signal. Renounced ownership can make a contract harder to administer but does not remove:
+
+- proxy admin control
+- hidden privileged roles
+- external controller contracts
+- arbitrary token taxes
+- blacklist mappings
+- trading gates
+- malicious router behavior
+
+Inspect the full privilege graph, including `AccessControl`, proxy slots, beacon contracts, timelocks, and external calls.
+
+**8. Add a capability-based EVM scanner**
+
+Your EVM section is directionally correct, but I would make the scanner inspect capabilities rather than function names. Function-name checks alone are easy to bypass.
+
+Scan for:
+
+```text
+mint or supply expansion
+balance manipulation
+blacklist and whitelist state
+trading pause
+per-wallet and per-transaction limits
+buy/sell tax mutation
+fee recipient mutation
+router mutation
+owner/admin roles
+proxy implementation upgrades
+arbitrary external calls
+hidden ETH/token withdrawals
+anti-bot exemptions
+```
+
+Then test state transitions where possible:
+
+```text
+setSellTax(max)
+blacklist(target)
+disableTrading()
+setMaxTx(0)
+upgradeTo(malicious_impl)
+```
+
+Do not execute them on mainnet. Use bytecode analysis, fork simulation, and access-control inspection.
+
+Robinhood Chain is no longer accurately described simply as “testnet/early rollout” if your reference point is today. Robinhood announced a public testnet on **February 10, 2026**, and its current documentation lists mainnet chain ID `4663`, testnet chain ID `46630`, and ETH as the native gas token. Treat mainnet availability and actual permissionless meme liquidity as separate questions. ([robinhood.com](https://robinhood.com/us/en/newsroom/robinhood-chain-launches-public-testnet/?utm_source=openai))
+
+**9. Rework the score to avoid double-counting**
+
+Several proposed features are correlated:
+
+- top-10 concentration
+- dev holdings
+- bundle percentage
+- sniper percentage
+- fresh-wallet ratio
+- holder age
+- funding graph
+
+Adding all of them linearly can over-weight one underlying phenomenon: coordinated ownership.
+
+Use feature groups with caps:
+
+```text
+distribution:       max 30
+developer:           max 20
+liquidity/execution: max 25
+flow/market action:  max 15
+social/narrative:    max 10
+```
+
+Then apply penalties separately:
+
+```text
+hard risk penalty: contract capability
+hard risk penalty: active coordinated selling
+hard risk penalty: liquidity deterioration
+hard risk penalty: deployer event
+```
+
+Do not allow strong social signals to compensate for dangerous contract or ownership behavior.
+
+**10. Add survival and censoring methodology**
+
+Your “runner rate” idea is right, but backtesting this market is easy to get wrong.
+
+Track outcomes at fixed horizons:
+
+```text
+return_30s
+return_2m
+return_5m
+return_15m
+return_1h
+return_24h
+max_adverse_excursion
+max_favorable_excursion
+time_to_peak
+survival_above_entry
+```
+
+Include realistic:
+
+- quote-to-land delay
+- failed transactions
+- priority fees
+- slippage
+- partial fills
+- inability to exit
+- delisted or inactive tokens
+- survivorship bias
+- look-ahead bias from later holder labels
+- API availability delays
+
+Most importantly, evaluate each filter by **incremental PnL and calibration**, not only by rug reduction. Use walk-forward testing by date and market regime.
+
+**11. Add a portfolio and operational risk layer**
+
+A sniper system can be right on individual tokens and still lose through correlated exposure.
+
+Add:
+
+- daily loss limit
+- per-launch exposure limit
+- maximum simultaneous positions
+- maximum exposure to one deployer cluster
+- maximum exposure to one narrative
+- cooldown after consecutive failures
+- circuit breaker during RPC or network instability
+- kill switch on abnormal sell failures
+- separate hot-wallet limits
+- deterministic transaction and decision logging
+
+Also maintain a “no-trade” state when your data is stale or contradictory. Missing data should not silently become a neutral score.
+
+**12. Suggested final decision pipeline**
+
+I would structure it as:
+
+```text
+Stage 0: ingest
+  program/account/slot events
+
+Stage 1: deterministic hard rejects
+  dangerous authorities/extensions
+  impossible or invalid token state
+  known blacklist
+  invalid pool/route
+  failed sell simulation
+  excessive immediate price impact
+
+Stage 2: fast ownership risk
+  creator allocation
+  cluster-adjusted concentration
+  funding graph
+  coordinated-buy confidence
+  active bundle selling
+
+Stage 3: execution quote
+  target-size price impact
+  round-trip costs
+  landing probability
+  minimum exit liquidity
+
+Stage 4: soft score
+  deployer prior
+  organic buyer quality
+  flow
+  narrative
+  regime
+
+Stage 5: position sizing
+  score plus uncertainty
+  liquidity and volatility
+  portfolio exposure
+  expected value
+
+Stage 6: continuous monitoring
+  creator/cluster sells
+  authority/admin changes
+  liquidity changes
+  sellability
+  buyer/seller regime shift
+```
+
+The biggest conceptual correction is this:
+
+> The system should not ask “Is this token safe?” It should ask “Given current state, target order size, execution costs, and exit conditions, is the expected risk-adjusted trade favorable?”
+
+Your document already contains most of the right signals. The main improvements are to make them **chain/program-aware, cluster-adjusted, execution-aware, dynamically calibrated, and evaluated by realized PnL rather than static safety labels**.

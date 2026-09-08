@@ -1,0 +1,2 @@
+export function canEvictToken(token) { return !(token.admission === 'qualified' || token.tracked || token.hasOpenPosition || token.isControl); }
+export function prioritize(tokens, cfg, { withEvicted = false } = {}) { const protectedTokens = tokens.filter(token => !canEvictToken(token)); const ranked = tokens.filter(canEvictToken).sort((a, b) => (b.score?.memeScore ?? -1) - (a.score?.memeScore ?? -1)); const kept = [...protectedTokens, ...ranked.slice(0, cfg.hotLimit)]; return withEvicted ? { kept, evicted: ranked.slice(cfg.hotLimit) } : kept; }

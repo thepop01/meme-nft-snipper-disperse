@@ -1,0 +1,1 @@
+export function aggregateRow(token, now) { return { assetKey: token.assetKey, admission: token.admission, memeScore: token.score?.memeScore ?? null, evidenceCoverage: token.score?.evidenceCoverage ?? null, firstSeenTs: token.firstSeenTs ?? null, evictedAt: now, expiresAt: now + 30 * 24 * 3600_000 }; }
