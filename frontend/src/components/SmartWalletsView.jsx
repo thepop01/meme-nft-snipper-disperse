@@ -52,6 +52,31 @@ function fmtHoldingTime(seconds) {
   return `${(sec / 86400).toFixed(1)}d`;
 }
 
+function fmtPct(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return '—';
+  return `${n.toFixed(1)}%`;
+}
+
+function fmtSignedPct(val) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return '—';
+  const prefix = n >= 0 ? '+' : '';
+  return `${prefix}${n.toFixed(1)}%`;
+}
+
+function fmtRelativeTime(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const ms = n < 1e11 ? n * 1000 : n;
+  const sec = Math.floor((Date.now() - ms) / 1000);
+  if (sec < 0) return 'just now';
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
 export default function SmartWalletsView({ initialWallets = null, initialCategory = 'smart' } = {}) {
   let toast = { success: () => {}, error: () => {}, info: () => {} };
   try { toast = useToast(); } catch {}
@@ -813,6 +838,24 @@ export default function SmartWalletsView({ initialWallets = null, initialCategor
               <li><strong>Ath &gt;50M:</strong> Early buy entry <strong>&le; $12.5M</strong> (<span className="mono">&le; 25%</span> of 50M ATH).</li>
             </ul>
           </div>
+
+          {/* Section 6: In-Memory Execution Metrics (Zero Transaction Storage) */}
+          <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#0f172a', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <TrendingUp size={15} color="#0284c7" /> 6. In-Memory Execution Metrics (Worker 4 &amp; 5)
+            </h4>
+            <p style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.6rem' }}>
+              Advanced performance metrics computed in-flight without persisting raw swap transactions (Strict Zero Transaction Storage constraint):
+            </p>
+            <ul style={{ fontSize: '0.82rem', color: '#334155', paddingLeft: '1.25rem', lineHeight: '1.6' }}>
+              <li><strong>Capture Ratio:</strong> Average realized exit market cap divided by token ATH. Higher means selling closer to peak ATH.</li>
+              <li><strong>Round-Trip Rate:</strong> Percentage of winning trades held until price dropped below entry. Lower is better.</li>
+              <li><strong>Sold &gt;50% ATH:</strong> Percentage of exit USD volume executed at or above 50% of the token ATH.</li>
+              <li><strong>&ge;$2M Hit Rate:</strong> Ratio and percentage of traded tokens whose ATH reached &ge; $2M.</li>
+              <li><strong>ROI %:</strong> Realized profit divided by total invested capital.</li>
+              <li><strong>Watermark:</strong> Most recent transaction signature and timestamp cursor for resumable, incremental metric processing.</li>
+            </ul>
+          </div>
         </div>
       ) : (
         /* DEDICATED TABLE FOR EACH CATEGORY */
@@ -868,11 +911,17 @@ export default function SmartWalletsView({ initialWallets = null, initialCategor
                     <tr>
                       <th>Wallet Address</th>
                       <th>PnL</th>
+                      <th>ROI</th>
                       <th>Win Rate</th>
                       <th>Buy/Win</th>
                       <th>Avg Buy Mcap</th>
                       <th>Avg Sell Mcap</th>
                       <th>Avg Holding Time</th>
+                      <th>Capture Ratio</th>
+                      <th>Round-Trip</th>
+                      <th>Sold &gt;50% ATH</th>
+                      <th>&ge;$2M Hit Rate</th>
+                      <th>Watermark</th>
                       <th style={{ textAlign: 'right' }}>Actions</th>
                     </tr>
                   )}
@@ -992,13 +1041,26 @@ export default function SmartWalletsView({ initialWallets = null, initialCategor
                           </div>
                         </td>
 
-                        {/* SMART & TRACKED TABLE BODY (7 Columns) */}
+                        {/* SMART & TRACKED TABLE BODY */}
                         {(listCategory === 'smart' || listCategory === 'tracked') && (
                           <>
                             <td>
                               <strong style={{ color: earned >= 0 ? '#059669' : '#dc2626', fontSize: '0.9rem' }}>
                                 {fmtUsd(earned)}
                               </strong>
+                            </td>
+                            <td>
+                              {w.roiPct != null && Number.isFinite(Number(w.roiPct)) ? (
+                                <span style={{
+                                  fontWeight: 600,
+                                  color: Number(w.roiPct) >= 0 ? '#059669' : '#dc2626',
+                                  fontSize: '0.86rem',
+                                }}>
+                                  {fmtSignedPct(w.roiPct)}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af' }}>—</span>
+                              )}
                             </td>
                             <td>
                               <span style={{
@@ -1058,6 +1120,86 @@ export default function SmartWalletsView({ initialWallets = null, initialCategor
                               }}>
                                 {fmtHoldingTime(w.avgHoldingTimeSec)}
                               </span>
+                            </td>
+                            <td>
+                              {w.captureRatioPct != null && Number.isFinite(Number(w.captureRatioPct)) ? (
+                                <span style={{
+                                  display: 'inline-block',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  background: Number(w.captureRatioPct) >= 70 ? '#dcfce7' : Number(w.captureRatioPct) >= 40 ? '#f0f9ff' : '#f3f4f6',
+                                  color: Number(w.captureRatioPct) >= 70 ? '#15803d' : Number(w.captureRatioPct) >= 40 ? '#0369a1' : '#4b5563',
+                                }}>
+                                  {fmtPct(w.captureRatioPct)}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {w.roundTripRatePct != null && Number.isFinite(Number(w.roundTripRatePct)) ? (
+                                <span style={{
+                                  display: 'inline-block',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  background: Number(w.roundTripRatePct) <= 20 ? '#dcfce7' : Number(w.roundTripRatePct) <= 40 ? '#fef3c7' : '#fee2e2',
+                                  color: Number(w.roundTripRatePct) <= 20 ? '#15803d' : Number(w.roundTripRatePct) <= 40 ? '#b45309' : '#b91c1c',
+                                }}>
+                                  {fmtPct(w.roundTripRatePct)}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {w.soldAbove50AthPct != null && Number.isFinite(Number(w.soldAbove50AthPct)) ? (
+                                <span style={{
+                                  display: 'inline-block',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  background: Number(w.soldAbove50AthPct) >= 50 ? '#dcfce7' : '#f3f4f6',
+                                  color: Number(w.soldAbove50AthPct) >= 50 ? '#15803d' : '#4b5563',
+                                }}>
+                                  {fmtPct(w.soldAbove50AthPct)}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {(w.tokensTradedGt2m != null || w.hitRateGt2mPct != null) ? (
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  <strong style={{ color: '#111827', fontSize: '0.84rem' }}>
+                                    {(w.tokensTradedGt2m || 0)}/{(w.tokensTradedGt2m || 0) + (w.tokensTradedLt2m || 0)}
+                                  </strong>
+                                  <span style={{ color: '#6b7280', fontSize: '0.72rem' }}>
+                                    {w.hitRateGt2mPct != null ? `${Number(w.hitRateGt2mPct).toFixed(0)}%` : '0%'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span style={{ color: '#9ca3af' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {(w.lastProcessedTxSignature || w.lastProcessedTimestamp) ? (
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                  {w.lastProcessedTxSignature ? (
+                                    <span className="mono" style={{ fontSize: '0.72rem', color: '#4b5563' }} title={w.lastProcessedTxSignature}>
+                                      {w.lastProcessedTxSignature.slice(0, 4)}…{w.lastProcessedTxSignature.slice(-4)}
+                                    </span>
+                                  ) : null}
+                                  {w.lastProcessedTimestamp ? (
+                                    <span style={{ fontSize: '0.68rem', color: '#9ca3af' }}>
+                                      {fmtRelativeTime(w.lastProcessedTimestamp) || new Date(Number(w.lastProcessedTimestamp) < 1e11 ? Number(w.lastProcessedTimestamp) * 1000 : Number(w.lastProcessedTimestamp)).toLocaleDateString()}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <span style={{ color: '#9ca3af', fontSize: '0.75rem' }}>—</span>
+                              )}
                             </td>
                           </>
                         )}

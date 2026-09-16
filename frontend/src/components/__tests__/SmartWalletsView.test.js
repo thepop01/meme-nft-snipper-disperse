@@ -70,6 +70,12 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/<th>Avg Buy Mcap<\/th>/);
     expect(html).toMatch(/<th>Avg Sell Mcap<\/th>/);
     expect(html).toMatch(/<th>Avg Holding Time<\/th>/);
+    expect(html).toMatch(/<th>ROI<\/th>/);
+    expect(html).toMatch(/<th>Capture Ratio<\/th>/);
+    expect(html).toMatch(/<th>Round-Trip<\/th>/);
+    expect(html).toMatch(/<th>Sold &gt;50% ATH<\/th>/);
+    expect(html).toMatch(/<th>(?:&ge;|≥)\$2M Hit Rate<\/th>/);
+    expect(html).toMatch(/<th>Watermark<\/th>/);
 
     // Verify old Ath bracket columns are removed
     expect(html).not.toMatch(/Ath - 500k/);
@@ -119,6 +125,12 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/<th>Avg Buy Mcap<\/th>/);
     expect(html).toMatch(/<th>Avg Sell Mcap<\/th>/);
     expect(html).toMatch(/<th>Avg Holding Time<\/th>/);
+    expect(html).toMatch(/<th>ROI<\/th>/);
+    expect(html).toMatch(/<th>Capture Ratio<\/th>/);
+    expect(html).toMatch(/<th>Round-Trip<\/th>/);
+    expect(html).toMatch(/<th>Sold &gt;50% ATH<\/th>/);
+    expect(html).toMatch(/<th>(?:&ge;|≥)\$2M Hit Rate<\/th>/);
+    expect(html).toMatch(/<th>Watermark<\/th>/);
 
     // Verify execution metrics and early buyer badge in tracked view
     expect(html).toMatch(/\+\$1\.2k/);
@@ -128,6 +140,63 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/30m/); // 1800s = 30m
     expect(html).toMatch(/Early.*#2.*PEPE2/);
     expect(html).toMatch(/Promote/);
+  });
+
+  it('renders advanced execution metrics values and fallbacks (Capture Ratio, Round-Trip, Sold >50% ATH, Hit Rate, Watermark, ROI)', () => {
+    const mockWallets = [
+      {
+        address: '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
+        chain: 'solana',
+        category: 'smart',
+        realizedProfitUsd: 4500,
+        roiPct: 185.4,
+        winRatePct: 70,
+        captureRatioPct: 84.5,
+        roundTripRatePct: 11.2,
+        soldAbove50AthPct: 62.8,
+        tokensTradedGt2m: 4,
+        tokensTradedLt2m: 1,
+        hitRateGt2mPct: 80,
+        lastProcessedTxSignature: '5K3jG1Z9abcd9XzA',
+        lastProcessedTimestamp: Date.now() - 3600000, // 1h ago
+      },
+      {
+        address: '8ZN71XTdVo8yRovnGLmNgW3Tgniw6A4J3JGLvPD686FP',
+        chain: 'solana',
+        category: 'smart',
+        realizedProfitUsd: 1200,
+        roiPct: null,
+        winRatePct: 50,
+        captureRatioPct: null,
+        roundTripRatePct: null,
+        soldAbove50AthPct: null,
+        tokensTradedGt2m: null,
+        tokensTradedLt2m: null,
+        hitRateGt2mPct: null,
+        lastProcessedTxSignature: null,
+        lastProcessedTimestamp: null,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <ToastProvider>
+          <SmartWalletsView initialWallets={mockWallets} />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    // Verify populated metrics for wallet 1
+    expect(html).toMatch(/\+185\.4%/); // ROI %
+    expect(html).toMatch(/84\.5%/);    // Capture ratio %
+    expect(html).toMatch(/11\.2%/);    // Round-trip %
+    expect(html).toMatch(/62\.8%/);    // Sold >50% ATH %
+    expect(html).toMatch(/4.*\/.*5/);  // Traded tokens ≥$2M ratio
+    expect(html).toMatch(/80%/);       // Hit rate %
+    expect(html).toMatch(/5K3j.*9XzA/); // Watermark tx signature
+
+    // Verify fallback dashes render for wallet 2 without errors
+    expect(html).toMatch(/—/);
   });
 
   it('renders multi-source scan selector and external inspection links (GMGN)', () => {
