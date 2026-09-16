@@ -4,23 +4,6 @@ const STORE_KEY = 'tracked-memes';
 
 let memCache = null;
 
-function loadRegistry() {
-  if (!memCache) {
-    const raw = load(STORE_KEY, { memes: [] });
-    const list = Array.isArray(raw) ? raw : (raw?.memes || []);
-    memCache = new Map(list.map(m => [m.ca, m]));
-  }
-  return memCache;
-}
-
-function persist() {
-  if (!memCache) return;
-  save(STORE_KEY, {
-    memes: Array.from(memCache.values()),
-    updatedAt: Date.now(),
-  });
-}
-
 /**
  * Safe finite number parsing to avoid NaN/Infinity serializing to null in JSON.
  */
@@ -46,6 +29,47 @@ export function canonicalizeCa(ca, chain) {
     return trimmed.toLowerCase();
   }
   return trimmed;
+}
+
+function loadRegistry() {
+  if (!memCache) {
+    const raw = load(STORE_KEY, { memes: [] });
+    const list = Array.isArray(raw) ? raw : (raw?.memes || []);
+    memCache = new Map();
+    for (const m of list) {
+      if (!m || !m.ca) continue;
+      const canonKey = canonicalizeCa(m.ca, m.chain);
+      m.ca = canonKey;
+      if (memCache.has(canonKey)) {
+        const existing = memCache.get(canonKey);
+        if (Array.isArray(m.sourceFlags)) {
+          for (const f of m.sourceFlags) {
+            if (!existing.sourceFlags.includes(f)) existing.sourceFlags.push(f);
+          }
+        }
+        if (m.currentMcap > existing.currentMcap) existing.currentMcap = m.currentMcap;
+        if (m.athMcap > existing.athMcap) {
+          existing.athMcap = m.athMcap;
+          existing.athTimestamp = m.athTimestamp;
+        }
+        if (m.backfilled) {
+          existing.backfilled = true;
+          existing.backfilledAt = existing.backfilledAt || m.backfilledAt;
+        }
+      } else {
+        memCache.set(canonKey, m);
+      }
+    }
+  }
+  return memCache;
+}
+
+function persist() {
+  if (!memCache) return;
+  save(STORE_KEY, {
+    memes: Array.from(memCache.values()),
+    updatedAt: Date.now(),
+  });
 }
 
 /**
@@ -117,7 +141,9 @@ export function upsertMeme(item) {
   // keep athMcap: 0, athTimestamp: 0 until Worker 2 or an ATH source populates it.
   if (existing.athMcap > 0 && existing.currentMcap > existing.athMcap) {
     existing.athMcap = existing.currentMcap;
-    existing.athTimestamp = item.athTimestamp != null ? toSafeNumber(item.athTimestamp, 0) : Date.now();
+    existing.athTimestamp = (item.athTimestamp && Number.isFinite(Number(item.athTimestamp)))
+      ? Number(item.athTimestamp)
+      : Date.now();
   }
 
   if (item.volume24hUsd != null) {
@@ -143,10 +169,16 @@ export function upsertMeme(item) {
   if (existing.backfilled !== true) {
     if (item.backfilled === true) {
       existing.backfilled = true;
-      existing.backfilledAt = item.backfilledAt || Date.now();
+      existing.backfilledAt = (item.backfilledAt != null && Number.isFinite(Number(item.backfilledAt)))
+        ? Number(item.backfilledAt)
+        : Date.now();
     } else {
       existing.backfilled = false;
       existing.backfilledAt = null;
+    }
+  } else {
+    if (existing.backfilledAt != null) {
+      existing.backfilledAt = toSafeNumber(existing.backfilledAt, Date.now());
     }
   }
 
@@ -234,9 +266,6 @@ export function markMemeBackfilled(ca) {
   if (!m && (trimmed.startsWith('0x') || trimmed.startsWith('0X'))) {
     m = reg.get(trimmed.toLowerCase());
   }
-  if (!m) {
-    m = reg.get(trimmed.toLowerCase());
-  }
   if (!m) return null;
 
   m.backfilled = true;
@@ -250,6 +279,6 @@ export function markMemeBackfilled(ca) {
  * Reset in-memory cache and persisted store (for test isolation).
  */
 export function resetMemeRegistry() {
-  memCache = new Map();
+  memCache = null;
   save(STORE_KEY, { memes: [], updatedAt: Date.now() });
 }

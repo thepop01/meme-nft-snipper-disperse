@@ -7,6 +7,7 @@ import {
   resetMemeRegistry,
   canonicalizeCa,
 } from '../memeRegistry.js';
+import { save } from '../../store.js';
 
 describe('memeRegistry shared store', () => {
   beforeEach(() => {
@@ -104,6 +105,66 @@ describe('memeRegistry shared store', () => {
     expect(solanaMemes).toHaveLength(2);
     expect(solanaMemes.some(m => m.ca === solanaUpper)).toBe(true);
     expect(solanaMemes.some(m => m.ca === solanaLower)).toBe(true);
+  });
+
+  it('strictly preserves Solana case in markMemeBackfilled and does not match different casing', () => {
+    const solanaUpper = 'SolanaUpperMint1111111111111111111111111';
+    const solanaLower = 'solanauppermint1111111111111111111111111';
+
+    upsertMeme({ ca: solanaLower, chain: 'solana', name: 'SolanaLowerToken' });
+
+    // Attempting to mark using solanaUpper must NOT mark solanaLower
+    const markedUpper = markMemeBackfilled(solanaUpper);
+    expect(markedUpper).toBeNull();
+
+    const lowerToken = getTrackedMemes({ ca: solanaLower })[0];
+    expect(lowerToken.backfilled).toBe(false);
+
+    // Marking with exact matching case works
+    const markedLower = markMemeBackfilled(solanaLower);
+    expect(markedLower).not.toBeNull();
+    expect(markedLower.ca).toBe(solanaLower);
+    expect(markedLower.backfilled).toBe(true);
+  });
+
+  it('deduplicates legacy mixed-case EVM records on loadRegistry', () => {
+    const mixedCase = '0x1F9840aADC5d4367d1214ab5c8f8b3400a40f12B';
+    const lowerCase = mixedCase.toLowerCase();
+
+    // Directly seed store with duplicate legacy records having mixed and lowercase EVM addresses
+    save('tracked-memes', {
+      memes: [
+        {
+          ca: mixedCase,
+          chain: 'robinhood',
+          name: 'UniswapMixed',
+          currentMcap: 2_000_000,
+          athMcap: 3_000_000,
+          sourceFlags: ['flag1'],
+          backfilled: false,
+        },
+        {
+          ca: lowerCase,
+          chain: 'robinhood',
+          name: 'UniswapLower',
+          currentMcap: 2_500_000,
+          athMcap: 4_000_000,
+          sourceFlags: ['flag2'],
+          backfilled: true,
+          backfilledAt: 1234567,
+        },
+      ],
+    });
+
+    const memes = getTrackedMemes();
+    expect(memes).toHaveLength(1);
+    expect(memes[0].ca).toBe(lowerCase);
+    expect(memes[0].currentMcap).toBe(2_500_000);
+    expect(memes[0].athMcap).toBe(4_000_000);
+    expect(memes[0].sourceFlags).toContain('flag1');
+    expect(memes[0].sourceFlags).toContain('flag2');
+    expect(memes[0].backfilled).toBe(true);
+    expect(memes[0].backfilledAt).toBe(1234567);
   });
 
   it('maintains ATH and T_ATH integrity without drift on equal ATH periodic polls', () => {
