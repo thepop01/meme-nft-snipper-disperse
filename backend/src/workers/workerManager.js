@@ -1,6 +1,6 @@
 import { runWorker1Pass } from './worker1CurrentMcap.js';
 import { runWorker2Pass } from './worker2AthMcap.js';
-import { processNextUnbackfilledMeme } from './worker3EarlyBuyers.js';
+import { processNextUnbackfilledMeme, processUnbackfilledMemesBatch } from './worker3EarlyBuyers.js';
 import { processWalletMetricsPass } from './worker4WalletMetrics.js';
 import { runWorker5Pass } from './worker5TokenDistribution.js';
 import { getEndpointHealth } from './rateLimiter.js';
@@ -20,7 +20,7 @@ export function startAllWorkers({ autoRun = true } = {}) {
     timers.push(setInterval(() => runWorker2Pass().catch(() => {}), 15 * 60_000));
 
     // Worker 3 & 4: Queue processing (every 3min and 5min)
-    timers.push(setInterval(() => processNextUnbackfilledMeme().catch(() => {}), 3 * 60_000));
+    timers.push(setInterval(() => processUnbackfilledMemesBatch(3).catch(() => {}), 3 * 60_000));
     timers.push(setInterval(() => processWalletMetricsPass().catch(() => {}), 5 * 60_000));
 
     // Worker 5: Hit-rate classifier (every 10min)

@@ -92,7 +92,14 @@ app.use('/api/smart-wallets', createSmartWalletsRouter({ getTokens: () => getTok
 
 // --- Worker Manager & Meme Registry ---
 app.get('/api/workers/status', (req, res) => res.json(getWorkerStatus()));
-app.get('/api/memes/registry', (req, res) => res.json({ memes: getTrackedMemes(req.query) }));
+app.get('/api/memes/registry', (req, res) => {
+  const list = getTrackedMemes(req.query).map(m => ({
+    ...m,
+    contractAddress: m.ca,
+    volume24h: m.volume24hUsd,
+  }));
+  res.json({ memes: list });
+});
 
 // --- Alerts ---
 app.get('/api/alerts', (req, res) => res.json({ alerts: listAlerts() }));

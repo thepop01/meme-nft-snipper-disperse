@@ -1,6 +1,98 @@
 import { getUnbackfilledMemes, markMemeBackfilled } from './memeRegistry.js';
 import { loadWallets, saveWallets, upsertWallets } from '../smartwallets/tracker.js';
+import { executeWithThrottle } from './rateLimiter.js';
 import { log } from '../bus.js';
+
+let rotationIndex = 0;
+
+/**
+ * Fetch trades from Birdeye DeFi API (ascending order from launch).
+ *
+ * @param {string} ca
+ * @returns {Promise<Array>}
+ */
+export async function fetchBirdeyeTrades(ca) {
+  const apiKey = process.env.BIRDEYE_API_KEY;
+  if (!apiKey) return [];
+
+  return executeWithThrottle('birdeye', async () => {
+    const url = `https://public-api.birdeye.so/defi/txs/token?address=${ca}&tx_type=swap&sort_type=asc&offset=0&limit=100`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        'X-API-KEY': apiKey,
+        'x-chain': 'solana',
+        'Accept': 'application/json',
+      },
+    });
+    if (!res.ok) throw new Error(`Birdeye error ${res.status}`);
+    const json = await res.json();
+    const items = json.data?.items || [];
+    return items
+      .map(it => ({
+        wallet: it.owner,
+        timestamp: it.blockUnixTime ? it.blockUnixTime * 1000 : 0,
+        entryMcap: it.base?.price ? (it.base.price * 1_000_000_000) : null,
+        pnl: 1,
+      }))
+      .filter(t => t.wallet);
+  });
+}
+
+/**
+ * Fetch trades from Helius Enhanced Transactions API.
+ *
+ * @param {string} ca
+ * @returns {Promise<Array>}
+ */
+export async function fetchHeliusTrades(ca) {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) return [];
+
+  return executeWithThrottle('helius', async () => {
+    const url = `https://api.helius.xyz/v0/addresses/${ca}/transactions?api-key=${apiKey}&type=SWAP&limit=100`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(8000),
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Helius error ${res.status}`);
+    const items = await res.json();
+    if (!Array.isArray(items)) return [];
+    return items
+      .map(tx => ({
+        wallet: tx.feePayer,
+        timestamp: tx.timestamp ? tx.timestamp * 1000 : 0,
+        entryMcap: null,
+        pnl: 1,
+      }))
+      .filter(t => t.wallet);
+  });
+}
+
+/**
+ * Multi-source rotating fetcher with automatic fallback.
+ * Rotates starting provider between Birdeye and Helius, falling back to the other.
+ *
+ * @param {string} ca
+ * @returns {Promise<Array>}
+ */
+export async function fetchEarlyBuyerTrades(ca) {
+  const providers = [fetchBirdeyeTrades, fetchHeliusTrades];
+  const startIdx = rotationIndex++ % providers.length;
+  const ordered = [providers[startIdx], providers[(startIdx + 1) % providers.length]];
+
+  for (const fetcher of ordered) {
+    try {
+      const trades = await fetcher(ca);
+      if (Array.isArray(trades) && trades.length > 0) {
+        return trades;
+      }
+    } catch (err) {
+      log('warn', `[worker3] provider attempt failed for ${ca}: ${err?.message || String(err)}`);
+    }
+  }
+  return [];
+}
 
 /**
  * Calculate the quota of first-buyer wallets for a given ATH market cap.
@@ -33,12 +125,13 @@ function tradePnl(trade) {
 }
 
 /**
- * Resolve the timestamp from a trade object.
+ * Resolve the timestamp from a trade object (normalizes seconds to milliseconds).
  */
 function tradeTimestamp(trade) {
   const v = trade.timestamp ?? trade.ts ?? trade.blockTime;
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 100_000_000_000 ? n * 1000 : n;
 }
 
 /**
@@ -67,11 +160,14 @@ export function extractEarlyBuyers(trades, athMcap, athTimestamp, options) {
 
   const quota = calculateFirstBuyersQuota(athMcap);
   const valueThreshold = athMcap * 0.25;
+  const normAthTimestamp = (athTimestamp > 0 && athTimestamp < 100_000_000_000)
+    ? athTimestamp * 1000
+    : athTimestamp;
 
   // --- Rule 1: Quota Buyers ---
   // Sort by timestamp ascending, take first N unique wallets with timestamp < athTimestamp.
   const preAthTrades = trades
-    .filter(t => tradeTimestamp(t) < athTimestamp)
+    .filter(t => tradeTimestamp(t) < normAthTimestamp)
     .sort((a, b) => tradeTimestamp(a) - tradeTimestamp(b));
 
   const quotaBuyers = new Set();
@@ -101,20 +197,14 @@ export function extractEarlyBuyers(trades, athMcap, athTimestamp, options) {
 }
 
 /**
- * Process the next unbackfilled meme token:
- * 1. Fetch trade history via the provided fetcher.
- * 2. Extract qualifying early buyers.
- * 3. Upsert those wallets into the tracker store.
- * 4. Mark the meme as backfilled.
+ * Process a single meme token for early buyer extraction.
  *
- * @param {Function} customTradeFetcher – async (ca) => Array of trade objects
+ * @param {Object} meme
+ * @param {Function} [customTradeFetcher]
  * @returns {Promise<{ca: string, buyersCount: number}|null>}
  */
-export async function processNextUnbackfilledMeme(customTradeFetcher) {
-  const pending = getUnbackfilledMemes(1);
-  if (!pending || pending.length === 0) return null;
-
-  const meme = pending[0];
+export async function processMemeToken(meme, customTradeFetcher = fetchEarlyBuyerTrades) {
+  if (!meme || !meme.ca) return null;
   const { ca, athMcap, athTimestamp } = meme;
 
   try {
@@ -153,4 +243,40 @@ export async function processNextUnbackfilledMeme(customTradeFetcher) {
     log('warn', `[worker3] failed to process ${ca}: ${err?.message || String(err)}`);
     return null;
   }
+}
+
+/**
+ * Process the next unbackfilled meme token:
+ * 1. Fetch trade history via the provided fetcher (defaults to multi-source rotating fetcher).
+ * 2. Extract qualifying early buyers.
+ * 3. Upsert those wallets into the tracker store.
+ * 4. Mark the meme as backfilled.
+ *
+ * @param {Function} [customTradeFetcher] – async (ca) => Array of trade objects
+ * @returns {Promise<{ca: string, buyersCount: number}|null>}
+ */
+export async function processNextUnbackfilledMeme(customTradeFetcher = fetchEarlyBuyerTrades) {
+  const pending = getUnbackfilledMemes(1);
+  if (!pending || pending.length === 0) return null;
+  return processMemeToken(pending[0], customTradeFetcher);
+}
+
+/**
+ * Process a batch of unbackfilled meme tokens in parallel to distribute the workload.
+ *
+ * @param {number} [batchSize=3]
+ * @param {Function} [customTradeFetcher]
+ * @returns {Promise<Array<{ca: string, buyersCount: number}>>}
+ */
+export async function processUnbackfilledMemesBatch(batchSize = 3, customTradeFetcher = fetchEarlyBuyerTrades) {
+  const pending = getUnbackfilledMemes(batchSize);
+  if (!pending || pending.length === 0) return [];
+
+  const results = await Promise.allSettled(
+    pending.map(meme => processMemeToken(meme, customTradeFetcher))
+  );
+
+  return results
+    .filter(r => r.status === 'fulfilled' && r.value != null)
+    .map(r => r.value);
 }

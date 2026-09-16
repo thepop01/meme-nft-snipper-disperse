@@ -2,6 +2,9 @@ const DEFAULT_CONFIGS = {
   dexscreener: { baseDelayMs: 1000, maxDelayMs: 10000 },
   geckoterminal: { baseDelayMs: 1500, maxDelayMs: 15000 },
   gmgn: { baseDelayMs: 1500, maxDelayMs: 20000 },
+  birdeye: { baseDelayMs: 500, maxDelayMs: 5000 },
+  helius: { baseDelayMs: 250, maxDelayMs: 5000 },
+  solscan: { baseDelayMs: 1000, maxDelayMs: 10000 },
   default: { baseDelayMs: 1500, maxDelayMs: 15000 },
 };
 

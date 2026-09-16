@@ -11,6 +11,20 @@ function fmtCurrency(val) {
   return `$${abs.toFixed(2)}`;
 }
 
+function formatDaysAgo(ts) {
+  if (!ts || !Number.isFinite(Number(ts)) || ts <= 0) return null;
+  const t = Number(ts) < 100_000_000_000 ? Number(ts) * 1000 : Number(ts);
+  const diffMs = Date.now() - t;
+  if (diffMs < 0) return 'recent';
+  const diffDays = Math.floor(diffMs / (86400 * 1000));
+  if (diffDays === 0) {
+    const diffHours = Math.floor(diffMs / (3600 * 1000));
+    return diffHours <= 1 ? 'just now' : `${diffHours}h ago`;
+  }
+  if (diffDays === 1) return '1d ago';
+  return `${diffDays}d ago`;
+}
+
 export default function MemeRegistryView({ initialMemes = null } = {}) {
   const [memes, setMemes] = useState(initialMemes ? { memes: initialMemes } : null);
   const [loading, setLoading] = useState(!initialMemes);
@@ -56,7 +70,7 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
     const q = search.trim().toLowerCase();
     return list.filter(m =>
       m.symbol?.toLowerCase().includes(q) ||
-      m.contractAddress?.toLowerCase().includes(q)
+      (m.contractAddress || m.ca)?.toLowerCase().includes(q)
     );
   }, [allMemes, filterStatus, search]);
 
@@ -203,39 +217,47 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
                 </tr>
               </thead>
               <tbody>
-                {filteredMemes.map(m => (
-                  <tr key={`${m.chain}:${m.contractAddress}`}>
-                    <td>
-                      <strong style={{ color: '#111827', fontSize: '0.9rem' }}>
-                        {m.symbol || 'N/A'}
-                      </strong>
-                    </td>
-                    <td>
-                      <span
-                        className="mono"
-                        style={{ fontSize: '0.78rem', color: '#6b7280' }}
-                        title={m.contractAddress}
-                      >
-                        {m.contractAddress
-                          ? `${m.contractAddress.slice(0, 6)}…${m.contractAddress.slice(-4)}`
-                          : 'N/A'}
-                      </span>
-                    </td>
-                    <td>
-                      <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
-                        {m.currentMcap ? fmtCurrency(m.currentMcap) : '—'}
-                      </strong>
-                    </td>
-                    <td>
-                      <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
-                        {m.athMcap ? fmtCurrency(m.athMcap) : '—'}
-                      </strong>
-                    </td>
-                    <td>
-                      <span style={{ color: '#111827', fontSize: '0.88rem' }}>
-                        {m.volume24h ? fmtCurrency(m.volume24h) : '—'}
-                      </span>
-                    </td>
+                {filteredMemes.map(m => {
+                  const address = m.contractAddress || m.ca || '';
+                  const volume = m.volume24h ?? m.volume24hUsd ?? null;
+                  return (
+                    <tr key={`${m.chain}:${address || m.symbol}`}>
+                      <td>
+                        <strong style={{ color: '#111827', fontSize: '0.9rem' }}>
+                          {m.symbol || 'N/A'}
+                        </strong>
+                      </td>
+                      <td>
+                        <span
+                          className="mono"
+                          style={{ fontSize: '0.78rem', color: '#6b7280' }}
+                          title={address}
+                        >
+                          {address
+                            ? `${address.slice(0, 6)}…${address.slice(-4)}`
+                            : 'N/A'}
+                        </span>
+                      </td>
+                      <td>
+                        <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
+                          {m.currentMcap ? fmtCurrency(m.currentMcap) : '—'}
+                        </strong>
+                      </td>
+                      <td>
+                        <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
+                          {m.athMcap ? fmtCurrency(m.athMcap) : '—'}
+                        </strong>
+                        {m.athTimestamp > 0 && (
+                          <div style={{ fontSize: '0.72rem', color: '#6b7280' }}>
+                            {formatDaysAgo(m.athTimestamp)}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span style={{ color: '#111827', fontSize: '0.88rem' }}>
+                          {volume ? fmtCurrency(volume) : '—'}
+                        </span>
+                      </td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.2rem', flexWrap: 'wrap' }}>
                         {Array.isArray(m.sourceFlags) && m.sourceFlags.map((src, idx) => (
@@ -272,7 +294,8 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
                       </span>
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
           </div>

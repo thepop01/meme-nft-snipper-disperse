@@ -245,7 +245,7 @@ export function getTrackedMemes(filter = {}) {
  */
 export function getUnbackfilledMemes(limit = 10) {
   const list = getTrackedMemes({ backfilled: false }).filter(m => m.athMcap > 0);
-  if (limit == null) return list;
+  if (limit == null || limit <= 0) return list;
   const parsedLimit = toSafeNumber(limit, 10);
   return list.slice(0, Math.max(0, parsedLimit));
 }
