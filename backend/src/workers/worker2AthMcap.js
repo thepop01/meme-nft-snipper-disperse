@@ -21,68 +21,77 @@ function firstNumber(...values) {
 
 function normalizeTimestamp(value) {
   const parsed = numberOrNull(value);
-  return parsed != null && parsed > 0 ? parsed : Date.now();
+  return parsed != null && parsed > 0 ? parsed : null;
 }
 
 function normalizePool(pool, includedById = new Map()) {
-  const attrs = pool?.attributes || {};
-  const relationships = pool?.relationships || {};
-  const baseId = relationships.base_token?.data?.id;
-  const base = includedById.get(baseId)?.attributes || {};
-  const ca = pool?.ca
-    ?? pool?.tokenAddress
-    ?? attrs.base_token_address
-    ?? base.address
-    ?? (typeof baseId === 'string' ? baseId.replace(/^solana_/, '') : null)
-    ?? (typeof pool?.id === 'string' ? pool.id.replace(/^solana_/, '') : null);
-  if (!ca || typeof ca !== 'string') return null;
+  try {
+    const attrs = pool?.attributes || {};
+    const relationships = pool?.relationships || {};
+    const baseId = relationships.base_token?.data?.id;
+    const base = includedById.get(baseId)?.attributes || {};
+    const ca = pool?.ca
+      ?? pool?.tokenAddress
+      ?? attrs.base_token_address
+      ?? base.address
+      ?? (typeof baseId === 'string' ? baseId.replace(/^solana_/, '') : null)
+      ?? (typeof pool?.id === 'string' ? pool.id.replace(/^solana_/, '') : null);
+    if (!ca || typeof ca !== 'string') return null;
 
-  const athMcap = firstNumber(
-    pool.athMcap,
-    pool.ath_mcap,
-    pool.allTimeHighMcap,
-    pool.all_time_high_mcap,
-    attrs.athMcap,
-    attrs.ath_mcap,
-    attrs.all_time_high_market_cap_usd,
-    attrs.fdv_usd,
-    attrs.market_cap_usd,
-    base.athMcap,
-    base.fdv_usd,
-  );
-  if (athMcap == null) return null;
+    // GeckoTerminal trending_pools endpoint returns CURRENT valuations,
+    // not historical ATH. Do NOT use fdv_usd or market_cap_usd as athMcap.
+    // Only accept fields explicitly named ATH or all_time_high.
+    const athMcap = firstNumber(
+      pool.athMcap,
+      pool.ath_mcap,
+      pool.allTimeHighMcap,
+      pool.all_time_high_mcap,
+      attrs.athMcap,
+      attrs.ath_mcap,
+      attrs.all_time_high_market_cap_usd,
+      base.athMcap,
+    );
+    if (athMcap == null) return null;
 
-  const currentMcap = firstNumber(
-    pool.currentMcap,
-    pool.current_mcap,
-    pool.marketCap,
-    pool.market_cap_usd,
-    attrs.currentMcap,
-    attrs.market_cap_usd,
-  );
-
-  return {
-    ca,
-    name: pool.name ?? attrs.name ?? base.name,
-    symbol: pool.symbol ?? attrs.symbol ?? base.symbol,
-    chain: pool.chain || 'solana',
-    athMcap,
-    athTimestamp: normalizeTimestamp(
+    // ATH timestamp must be present and valid. Do NOT default to Date.now()
+    // as that fabricates T_ATH and breaks Worker 3's pre-ATH filtering.
+    const athTimestamp = normalizeTimestamp(
       pool.athTimestamp
       ?? pool.ath_timestamp
       ?? attrs.athTimestamp
       ?? attrs.ath_timestamp
       ?? attrs.ath_at,
-    ),
-    currentMcap,
-    volume24hUsd: firstNumber(
-      pool.volume24hUsd,
-      pool.volume_24h_usd,
-      pool.volume?.h24,
-      attrs.volume24hUsd,
-      attrs.volume_usd?.h24,
-    ),
-  };
+    );
+    if (athTimestamp == null) return null; // Skip if no valid ATH timestamp
+
+    const currentMcap = firstNumber(
+      pool.currentMcap,
+      pool.current_mcap,
+      pool.marketCap,
+      pool.market_cap_usd,
+      attrs.currentMcap,
+      attrs.market_cap_usd,
+    );
+
+    return {
+      ca,
+      name: pool.name ?? attrs.name ?? base.name,
+      symbol: pool.symbol ?? attrs.symbol ?? base.symbol,
+      chain: pool.chain || 'solana',
+      athMcap,
+      athTimestamp,
+      currentMcap,
+      volume24hUsd: firstNumber(
+        pool.volume24hUsd,
+        pool.volume_24h_usd,
+        pool.volume?.h24,
+        attrs.volume24hUsd,
+        attrs.volume_usd?.h24,
+      ),
+    };
+  } catch (_) {
+    return null; // Skip malformed items
+  }
 }
 
 function responsePools(data) {
@@ -128,6 +137,7 @@ export async function runWorker2Pass(customFetcher = fetchAthMcapGt4m) {
       const athMcap = numberOrNull(item?.athMcap);
       if (athMcap == null || athMcap < ATH_MCAP_THRESHOLD) continue;
 
+      const athTimestamp = numberOrNull(item?.athTimestamp);
       const currentMcap = numberOrNull(item?.currentMcap);
       const volume24hUsd = numberOrNull(item?.volume24hUsd);
       const record = upsertMeme({
@@ -136,7 +146,7 @@ export async function runWorker2Pass(customFetcher = fetchAthMcapGt4m) {
         symbol: item?.symbol,
         chain: item?.chain || 'solana',
         athMcap,
-        athTimestamp: normalizeTimestamp(item?.athTimestamp),
+        athTimestamp,
         ...(currentMcap == null ? {} : { currentMcap }),
         ...(volume24hUsd == null ? {} : { volume24hUsd }),
         source: 'ath_gt_4m',

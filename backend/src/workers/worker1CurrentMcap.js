@@ -22,7 +22,8 @@ function firstNumber(...values) {
 function normalizeChain(item) {
   const chain = String(item?.chain ?? item?.chainId ?? '').toLowerCase();
   if (chain === 'robinhood' || chain === 'hood') return 'robinhood';
-  return 'solana';
+  if (chain === 'solana') return 'solana';
+  return null; // Unsupported chain
 }
 
 function responseItems(data) {
@@ -33,45 +34,52 @@ function responseItems(data) {
 }
 
 function normalizeBoost(item) {
-  const attrs = item?.attributes || {};
-  const token = item?.token || item?.baseToken || {};
-  const ca = item?.ca
-    ?? item?.tokenAddress
-    ?? item?.address
-    ?? token.address
-    ?? attrs.address;
-  if (!ca || typeof ca !== 'string') return null;
+  try {
+    const attrs = item?.attributes || {};
+    const token = item?.token || item?.baseToken || {};
+    const ca = item?.ca
+      ?? item?.tokenAddress
+      ?? item?.address
+      ?? token.address
+      ?? attrs.address;
+    if (!ca || typeof ca !== 'string') return null;
 
-  // The boosts endpoint does not always expose market cap. Prefer an explicit
-  // provider value and retain the historical boost amount fallback for the
-  // endpoint's compact response shape.
-  const currentMcap = firstNumber(
-    item.currentMcap,
-    item.current_mcap,
-    item.marketCap,
-    item.market_cap_usd,
-    item.fdv,
-    item.fdvUsd,
-    attrs.currentMcap,
-    attrs.market_cap_usd,
-    attrs.fdv_usd,
-    numberOrNull(item.totalAmount) == null ? null : Number(item.totalAmount) * 1000,
-  );
+    const chain = normalizeChain(item);
+    if (!chain) return null; // Unsupported chain
 
-  return {
-    ca,
-    name: item.name ?? token.name ?? attrs.name,
-    symbol: item.symbol ?? token.symbol ?? attrs.symbol,
-    chain: normalizeChain(item),
-    currentMcap,
-    volume24hUsd: firstNumber(
-      item.volume24hUsd,
-      item.volume_24h_usd,
-      item.volume?.h24,
-      attrs.volume24hUsd,
-      attrs.volume_usd?.h24,
-    ),
-  };
+    // The boosts endpoint does not provide market cap directly.
+    // Prefer explicit market-cap fields; do NOT use totalAmount (boost spend).
+    const currentMcap = firstNumber(
+      item.currentMcap,
+      item.current_mcap,
+      item.marketCap,
+      item.market_cap_usd,
+      item.fdv,
+      item.fdvUsd,
+      attrs.currentMcap,
+      attrs.market_cap_usd,
+      attrs.fdv_usd,
+    );
+
+    if (currentMcap == null) return null; // No market cap source
+
+    return {
+      ca,
+      name: item.name ?? token.name ?? attrs.name,
+      symbol: item.symbol ?? token.symbol ?? attrs.symbol,
+      chain,
+      currentMcap,
+      volume24hUsd: firstNumber(
+        item.volume24hUsd,
+        item.volume_24h_usd,
+        item.volume?.h24,
+        attrs.volume24hUsd,
+        attrs.volume_usd?.h24,
+      ),
+    };
+  } catch (_) {
+    return null; // Skip malformed items
+  }
 }
 
 /**

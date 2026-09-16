@@ -124,7 +124,7 @@ describe('Worker 1 and Worker 2 discovery', () => {
         json: async () => [{
           tokenAddress: 'DefaultOne1111111111111111111111111111111111',
           chainId: 'solana',
-          totalAmount: 2_000,
+          currentMcap: 2_500_000,
         }],
       })
       .mockResolvedValueOnce({
@@ -134,8 +134,8 @@ describe('Worker 1 and Worker 2 discovery', () => {
           attributes: {
             base_token_address: 'DefaultTwo1111111111111111111111111111111111',
             name: 'Default Two / SOL',
-            fdv_usd: '4000000',
-            market_cap_usd: '2500000',
+            ath_mcap: '4000000',
+            ath_timestamp: 1_700_000_000_000,
           },
         }] }),
       }));
@@ -146,13 +146,14 @@ describe('Worker 1 and Worker 2 discovery', () => {
     expect(current).toEqual(expect.arrayContaining([
       expect.objectContaining({
         ca: 'DefaultOne1111111111111111111111111111111111',
-        currentMcap: 2_000_000,
+        currentMcap: 2_500_000,
       }),
     ]));
     expect(ath).toEqual(expect.arrayContaining([
       expect.objectContaining({
         ca: 'DefaultTwo1111111111111111111111111111111111',
         athMcap: 4_000_000,
+        athTimestamp: 1_700_000_000_000,
       }),
     ]));
     expect(throttleCalls).toEqual(['dexscreener', 'geckoterminal']);
