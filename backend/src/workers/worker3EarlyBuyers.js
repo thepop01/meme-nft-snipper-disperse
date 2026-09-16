@@ -19,7 +19,7 @@ export async function fetchBirdeyeTrades(ca, options = {}) {
   const apiKey = process.env.BIRDEYE_API_KEY;
   if (!apiKey) return [];
 
-  const maxPages = options.maxPages || 5;
+  const maxPages = options.maxPages || 12;
   const normAthTs = options.athTimestamp
     ? (options.athTimestamp > 0 && options.athTimestamp < 100_000_000_000 ? options.athTimestamp * 1000 : options.athTimestamp)
     : null;
