@@ -11,12 +11,13 @@ const BotsView = lazy(() => import('./components/BotsView'));
 const DashboardView = lazy(() => import('./components/DashboardView'));
 const DisperseView = lazy(() => import('./components/DisperseView'));
 const MemeFinderView = lazy(() => import('./components/MemeFinderView'));
+const MemeRegistryView = lazy(() => import('./components/MemeRegistryView'));
 const SmartWalletsView = lazy(() => import('./components/SmartWalletsView'));
 const NFTMintBotView = lazy(() => import('./components/NFTMintBotView'));
 const SniperView = lazy(() => import('./components/SniperView'));
 const WalletsView = lazy(() => import('./components/WalletsView'));
 
-const VALID_TABS = ['dashboard', 'activity', 'wallets', 'disperse', 'mintbot', 'memefinder', 'sol-meme', 'evm-meme', 'smart-wallets', 'sniper', 'bots'];
+const VALID_TABS = ['dashboard', 'activity', 'wallets', 'disperse', 'mintbot', 'sol-meme', 'evm-meme', 'smart-wallets', 'tracked-memes', 'sniper', 'bots'];
 
 function PageFallback() {
   return <div className="page-loading" role="status"><span className="spinner" /> Loading workspace…</div>;
@@ -27,7 +28,8 @@ function HomeRedirect() {
   let saved = null;
   try {
     const stored = localStorage.getItem('activeTab');
-    if (stored && VALID_TABS.includes(stored)) saved = stored;
+    if (stored === 'memefinder') saved = 'sol-meme';
+    else if (stored && VALID_TABS.includes(stored)) saved = stored;
   } catch {}
   return <Navigate to={`/${saved || 'dashboard'}`} replace />;
 }
@@ -117,7 +119,7 @@ function App() {
   return (
     <ToastProvider>
       <div className="app-container">
-        <Sidebar account={account} setAccount={setAccount} walletCount={walletDirectory.wallets.length || 200} />
+        <Sidebar account={account} setAccount={setAccount} walletCount={walletDirectory?.wallets?.length ?? 0} />
         <div className="main-content">
           <Suspense fallback={<PageFallback />}><Routes>
             <Route path="/" element={<HomeRedirect />} />
@@ -126,10 +128,11 @@ function App() {
             <Route path="/wallets" element={guard('Wallets', <WalletsView walletDirectory={walletDirectory} setWalletDirectory={setWalletDirectory} backendOnline={directoryBackendOnline} />)} />
             <Route path="/disperse" element={guard('Disperse', <DisperseView account={account} walletDirectory={walletDirectory} />)} />
             <Route path="/mintbot" element={guard('Mint Bot', <NFTMintBotView walletDirectory={walletDirectory} />)} />
-            <Route path="/memefinder/:feedId?" element={guard('Meme Finder', <MemeFinderView walletDirectory={walletDirectory} basePath="/memefinder" />)} />
+            <Route path="/memefinder/*" element={<Navigate to="/sol-meme" replace />} />
             <Route path="/sol-meme/:feedId?" element={guard('Solana Meme Terminal', <MemeFinderView walletDirectory={walletDirectory} forcedChain="solana" basePath="/sol-meme" />)} />
             <Route path="/evm-meme/:feedId?" element={guard('EVM Meme Terminal', <MemeFinderView walletDirectory={walletDirectory} forcedChain="robinhood" basePath="/evm-meme" />)} />
             <Route path="/smart-wallets" element={guard('Smart Wallets', <SmartWalletsView />)} />
+            <Route path="/tracked-memes" element={guard('Tracked Memes', <MemeRegistryView />)} />
             <Route path="/sniper" element={guard('Sniper', <SniperView />)} />
             <Route path="/bots" element={guard('My Bots', <BotsView />)} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

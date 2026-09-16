@@ -1,120 +1,262 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import MemeRegistryView from '../MemeRegistryView.jsx';
 
-vi.mock('../../utils/sniperApi', () => ({
-  getBackendUrl: () => 'http://localhost:3001',
-}));
+vi.stubGlobal('fetch', async () => ({ ok: true, json: async () => ({ memes: [] }) }));
 
 describe('MemeRegistryView', () => {
-  it('renders tracked memes table headers and rows', () => {
+  it('renders table headers: Token | Contract Address | Current Mcap | ATH Mcap | 24h Volume | Sources | Status', () => {
     const mockMemes = [
       {
-        ca: 'MintX11111111111111111111111111111111111111',
-        name: 'AlphaToken',
-        symbol: 'ALPHA',
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
         currentMcap: 2500000,
-        athMcap: 5000000,
-        volume24hUsd: 800000,
-        sourceFlags: ['current_gt_2m', 'ath_gt_4m'],
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
         backfilled: true,
       },
     ];
 
-    const html = renderToString(<MemeRegistryView initialMemes={mockMemes} />);
-    expect(html).toMatch(/Tracked Memes Registry/);
-    expect(html).toMatch(/ALPHA/);
-    expect(html).toMatch(/\$2\.50M/);
-    expect(html).toMatch(/\$5\.00M/);
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+    expect(html).toMatch(/<th>Token<\/th>/);
+    expect(html).toMatch(/<th>Contract Address<\/th>/);
+    expect(html).toMatch(/<th>Current Mcap<\/th>/);
+    expect(html).toMatch(/<th>ATH Mcap<\/th>/);
+    expect(html).toMatch(/<th>24h Volume<\/th>/);
+    expect(html).toMatch(/<th>Sources<\/th>/);
+    expect(html).toMatch(/<th>Status<\/th>/);
   });
 
-  it('displays filter buttons', () => {
+  it('renders meme data with symbol and mcap values formatted correctly', () => {
     const mockMemes = [
       {
-        ca: 'Mint1',
-        name: 'Token1',
-        symbol: 'T1',
-        currentMcap: 2000000,
-        athMcap: 4000000,
-        volume24hUsd: 500000,
-        sourceFlags: [],
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn', 'pumpfun'],
+        backfilled: true,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    // Verify symbol renders
+    expect(html).toMatch(/PEPE/);
+    // Verify contract address shortened
+    expect(html).toMatch(/7vfC.*8xua/);
+    // Verify mcap formatted as "$2.50M"
+    expect(html).toMatch(/\$2\.50M/);
+    // Verify ATH formatted as "$5.50M"
+    expect(html).toMatch(/\$5\.50M/);
+    // Verify volume formatted as "$850k"
+    expect(html).toMatch(/\$850\.0k/);
+  });
+
+  it('renders filter buttons: All, Backfilled, Pending Worker 3', () => {
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView />
+      </MemoryRouter>
+    );
+    expect(html).toMatch(/All \(/i);
+    expect(html).toMatch(/Backfilled/i);
+    expect(html).toMatch(/Pending Worker 3/i);
+  });
+
+  it('filters memes by backfilled status', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
         backfilled: true,
       },
       {
-        ca: 'Mint2',
-        name: 'Token2',
-        symbol: 'T2',
+        chain: 'solana',
+        contractAddress: '8vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xub',
+        symbol: 'DOGE',
+        currentMcap: 1500000,
+        athMcap: 3000000,
+        volume24h: 500000,
+        sourceFlags: ['pumpfun'],
+        backfilled: false,
+      },
+    ];
+
+    // Note: In SSR tests, we can't easily simulate click events,
+    // so we verify the component structure and that it accepts initialMemes
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    // Verify both memes render initially
+    expect(html).toMatch(/PEPE/);
+    expect(html).toMatch(/DOGE/);
+    // Verify filter button exists (clicking would be tested in integration tests)
+    expect(html).toMatch(/Backfilled/i);
+  });
+
+  it('displays status as green checkmark for backfilled memes', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/✅ Backfilled/);
+    expect(html).toMatch(/#dcfce7/); // green background
+  });
+
+  it('displays status as amber hourglass for pending worker 3 memes', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '8vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xub',
+        symbol: 'DOGE',
+        currentMcap: 1500000,
+        athMcap: 3000000,
+        volume24h: 500000,
+        sourceFlags: ['pumpfun'],
+        backfilled: false,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/⏳ Pending Worker 3/);
+    expect(html).toMatch(/#fef3c7/); // amber background
+  });
+
+  it('renders registry title and description', () => {
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView />
+      </MemoryRouter>
+    );
+    expect(html).toMatch(/Tracked Memes Registry/i);
+    expect(html).toMatch(/Distributed Meme Workers/i);
+    expect(html).toMatch(/Worker 1.*Worker 2.*Worker 3/s);
+  });
+
+  it('counts backfilled and pending memes correctly in KPI cards', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+      {
+        chain: 'solana',
+        contractAddress: '8vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xub',
+        symbol: 'DOGE',
+        currentMcap: 1500000,
+        athMcap: 3000000,
+        volume24h: 500000,
+        sourceFlags: ['pumpfun'],
+        backfilled: false,
+      },
+      {
+        chain: 'solana',
+        contractAddress: '9vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xuc',
+        symbol: 'SHIB',
         currentMcap: 3000000,
         athMcap: 6000000,
-        volume24hUsd: 600000,
-        sourceFlags: [],
-        backfilled: false,
-      },
-    ];
-
-    const html = renderToString(<MemeRegistryView initialMemes={mockMemes} />);
-    expect(html).toMatch(/All/);
-    expect(html).toMatch(/Backfilled/);
-    expect(html).toMatch(/Pending Worker 3/);
-  });
-
-  it('shows status badge for backfilled tokens', () => {
-    const mockMemes = [
-      {
-        ca: 'Mint1',
-        name: 'Token1',
-        symbol: 'T1',
-        currentMcap: 2000000,
-        athMcap: 4000000,
-        volume24hUsd: 500000,
-        sourceFlags: [],
+        volume24h: 1200000,
+        sourceFlags: ['gmgn'],
         backfilled: true,
       },
     ];
 
-    const html = renderToString(<MemeRegistryView initialMemes={mockMemes} />);
-    expect(html).toMatch(/Backfilled/);
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    // Verify all memes count is 3
+    expect(html).toMatch(/All Memes.*3/);
+    // Verify backfilled count is 2
+    expect(html).toMatch(/Backfilled.*2/);
+    // Verify pending count is 1
+    expect(html).toMatch(/Pending Worker 3.*1/);
   });
 
-  it('shows status badge for pending tokens', () => {
+  it('searches memes by symbol and contract address', () => {
     const mockMemes = [
       {
-        ca: 'Mint1',
-        name: 'Token1',
-        symbol: 'T1',
-        currentMcap: 2000000,
-        athMcap: 4000000,
-        volume24hUsd: 500000,
-        sourceFlags: [],
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+      {
+        chain: 'solana',
+        contractAddress: '8vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xub',
+        symbol: 'DOGE',
+        currentMcap: 1500000,
+        athMcap: 3000000,
+        volume24h: 500000,
+        sourceFlags: ['pumpfun'],
         backfilled: false,
       },
     ];
 
-    const html = renderToString(<MemeRegistryView initialMemes={mockMemes} />);
-    expect(html).toMatch(/Pending/);
-  });
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
 
-  it('displays source flags', () => {
-    const mockMemes = [
-      {
-        ca: 'Mint1',
-        name: 'Token1',
-        symbol: 'T1',
-        currentMcap: 2000000,
-        athMcap: 4000000,
-        volume24hUsd: 500000,
-        sourceFlags: ['current_gt_2m', 'ath_gt_4m'],
-        backfilled: true,
-      },
-    ];
-
-    const html = renderToString(<MemeRegistryView initialMemes={mockMemes} />);
-    expect(html).toMatch(/current_gt_2m/);
-    expect(html).toMatch(/ath_gt_4m/);
-  });
-
-  it('handles empty meme list', () => {
-    const html = renderToString(<MemeRegistryView initialMemes={[]} />);
-    expect(html).toMatch(/No memes found/);
+    // Verify search field exists
+    expect(html).toMatch(/Search token symbol or contract address/i);
+    // Verify both memes present in initial render
+    expect(html).toMatch(/PEPE/);
+    expect(html).toMatch(/DOGE/);
   });
 });

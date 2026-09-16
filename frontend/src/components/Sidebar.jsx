@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { 
-  Wallet, Send, Clock, Zap, LogOut, LayoutDashboard, 
-  Radar, Crosshair, Bot, Activity, Calculator, Sun, Moon, Info
+import { NavLink, useNavigate } from 'react-router-dom';
+import {
+  Wallet, Zap, LogOut, LayoutDashboard,
+  Radar, Crosshair, Bot, Activity
 } from 'lucide-react';
 import { shortAddr } from '../utils/format';
 
@@ -38,13 +38,10 @@ export function LeafNavIcon({ size = 18 }) {
   );
 }
 
-const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
+const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
   const navigate = useNavigate();
-  const location = useLocation();
   const [availableWallets, setAvailableWallets] = useState([]);
   const [connectedWallet, setConnectedWallet] = useState(null);
-  const [useUsd, setUseUsd] = useState(false);
-  const [themeMode, setThemeMode] = useState('light');
 
   useEffect(() => {
     detectWallets();
@@ -167,13 +164,13 @@ const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
     setConnectedWallet(null);
   };
 
-  const displayAddress = account || '0x8840d12e698888ad592';
-  const displayName = account ? (connectedWallet?.name || 'My Wallet') : 'Sikdar_11426';
+  const displayAddress = account ? shortAddr(account) : 'No Wallet';
+  const displayName = account ? (connectedWallet?.name || 'My Wallet') : 'Not Connected';
 
   return (
     <aside className="umi-sidebar">
       {/* Brand Header */}
-      <div className="umi-brand" onClick={() => navigate('/wallets')}>
+      <div className="umi-brand" onClick={() => navigate('/dashboard')}>
         <UmiLogo size={26} />
         <span className="umi-brand-title">TradeForge</span>
       </div>
@@ -181,17 +178,17 @@ const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
       {/* EVM & Core Tools Navigation Card */}
       <div className="umi-nav-card">
         <div className="umi-card-header-label">EVM Tools</div>
-        
-        <NavLink 
-          to="/mintbot" 
+
+        <NavLink
+          to="/mintbot"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <LeafNavIcon size={17} />
           <span>Mints</span>
         </NavLink>
 
-        <NavLink 
-          to="/wallets" 
+        <NavLink
+          to="/wallets"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <Wallet size={17} />
@@ -199,30 +196,13 @@ const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
           <span className="umi-badge">{walletCount}</span>
         </NavLink>
 
-        <NavLink 
-          to="/disperse" 
+        <NavLink
+          to="/disperse"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <DisperseNavIcon size={17} />
           <span>Disperse</span>
         </NavLink>
-
-        <div className="umi-usd-row">
-          <label className="umi-usd-toggle">
-            <input 
-              type="checkbox" 
-              checked={useUsd} 
-              onChange={e => setUseUsd(e.target.checked)} 
-            />
-            <span className="umi-switch-track">
-              <span className="umi-switch-thumb" />
-            </span>
-            <span className="umi-usd-label">USD</span>
-          </label>
-          <button type="button" className="umi-calc-btn" title="Calculator">
-            <Calculator size={15} />
-          </button>
-        </div>
       </div>
 
       {/* Meme Trading & Sniper Navigation Card */}
@@ -245,24 +225,24 @@ const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
           <span>EVM Meme</span>
         </NavLink>
 
-        <NavLink 
-          to="/smart-wallets" 
+        <NavLink
+          to="/smart-wallets"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <Wallet size={17} />
-          <span>Smart Wallets</span>
+          <span>Wallets</span>
         </NavLink>
 
-        <NavLink 
-          to="/memefinder" 
+        <NavLink
+          to="/tracked-memes"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <Radar size={17} />
-          <span>Meme Finder (all)</span>
+          <span>Tracked Memes</span>
         </NavLink>
 
-        <NavLink 
-          to="/sniper" 
+        <NavLink
+          to="/sniper"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
           <Crosshair size={17} />
@@ -303,61 +283,35 @@ const Sidebar = ({ account, setAccount, walletCount = 200 }) => {
       <div className="umi-nav-card umi-profile-bottom-card">
         <div className="umi-profile-row">
           <div className="umi-avatar">
-            {displayName[0]?.toUpperCase() || 'S'}
+            {account ? (displayName[0]?.toUpperCase() || 'W') : <Wallet size={16} />}
           </div>
           <div className="umi-profile-details">
             <span className="umi-profile-name">{displayName}</span>
-            <span className="umi-profile-addr">{shortAddr(displayAddress)}</span>
+            <span className="umi-profile-addr">{displayAddress}</span>
           </div>
           {account ? (
-            <button 
-              type="button" 
-              className="umi-profile-action" 
-              onClick={disconnectWallet} 
+            <button
+              type="button"
+              className="umi-profile-action"
+              onClick={disconnectWallet}
               title="Disconnect"
             >
               <LogOut size={15} />
             </button>
           ) : (
-            <button 
-              type="button" 
-              className="umi-profile-action" 
+            <button
+              type="button"
+              className="umi-profile-action"
               onClick={() => {
                 if (availableWallets.length > 0) connectWallet(availableWallets[0]);
                 else if (window.ethereum) connectWallet({ name: 'MetaMask', provider: window.ethereum });
-              }} 
+              }}
               title="Connect Wallet"
             >
               <Zap size={15} />
             </button>
           )}
         </div>
-
-        {/* Free Plan Alert Banner */}
-        <div className="umi-plan-card">
-          <div className="umi-plan-header">
-            <Info size={14} className="umi-plan-icon" />
-            <span className="umi-plan-title">You're on a free plan</span>
-          </div>
-          <p className="umi-plan-desc">
-            To start minting, <a href="#upgrade" onClick={(e) => { e.preventDefault(); alert('Upgrade to Premium plan for unlimited mints.'); }}>upgrade</a> to a paid plan
-          </p>
-        </div>
-      </div>
-
-      {/* Bottom Theme Mode Toggle */}
-      <div className="umi-theme-row">
-        <label className="umi-theme-toggle">
-          <input 
-            type="checkbox" 
-            checked={themeMode === 'dark'} 
-            onChange={e => setThemeMode(e.target.checked ? 'dark' : 'light')} 
-          />
-          <span className="umi-switch-track">
-            <span className="umi-switch-thumb" />
-          </span>
-          <Sun size={15} className="umi-theme-icon" />
-        </label>
       </div>
     </aside>
   );
