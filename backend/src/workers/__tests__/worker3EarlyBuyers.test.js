@@ -17,6 +17,8 @@ import {
   processNextUnbackfilledMeme,
   processUnbackfilledMemesBatch,
   fetchEarlyBuyerTrades,
+  fetchPumpFunTrades,
+  fetchBirdeyeTrades,
 } from '../worker3EarlyBuyers.js';
 
 // ---------------------------------------------------------------------------
@@ -205,6 +207,23 @@ describe('extractEarlyBuyers – value buyers', () => {
     const result = extractEarlyBuyers(trades, athMcap, athTimestamp);
     expect(result).not.toContain('V5');
   });
+
+  it('caps value buyer threshold at 50M for tokens with ATH > 200M', () => {
+    const hugeAth = 400_000_000; // 25% would be 100M, but capped at 50M
+    const trades = [
+      makeTrade({ wallet: 'Q1', timestamp: 1_700_000_000_000, entryMcap: 10_000, pnl: 10 }),
+      // Bought at 40M (< 50M cap) with positive PnL
+      makeTrade({ wallet: 'VAL_40M', timestamp: 1_700_000_050_000, entryMcap: 40_000_000, pnl: 500 }),
+      // Bought at 60M (> 50M cap, even though < 100M) with positive PnL
+      makeTrade({ wallet: 'VAL_60M', timestamp: 1_700_000_060_000, entryMcap: 60_000_000, pnl: 500 }),
+    ];
+
+    // Using maxQuota: 1 so only Q1 takes the quota slot, leaving VAL_40M and VAL_60M to Rule 2
+    const result = extractEarlyBuyers(trades, hugeAth, athTimestamp, { maxQuota: 1 });
+    expect(result).toContain('Q1');
+    expect(result).toContain('VAL_40M');
+    expect(result).not.toContain('VAL_60M');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -324,7 +343,7 @@ describe('processNextUnbackfilledMeme', () => {
 
     const result = await processNextUnbackfilledMeme(fetcher);
     expect(result).toEqual({ ca, buyersCount: 2 });
-    expect(fetcher).toHaveBeenCalledWith(ca);
+    expect(fetcher).toHaveBeenCalledWith(ca, expect.objectContaining({ athMcap: 5_000_000, athTimestamp: 1_700_000_100_000 }));
 
     // Should be marked as backfilled
     const pending = getUnbackfilledMemes(10);
@@ -373,6 +392,20 @@ describe('processNextUnbackfilledMeme', () => {
     expect(result).toBeNull();
 
     // Should NOT be marked backfilled since processing failed
+    const pending = getUnbackfilledMemes(10);
+    expect(pending.find(m => m.ca === ca)).toBeDefined();
+  });
+
+  it('does not mark meme backfilled when trade provider returns empty array', async () => {
+    const ca = 'EmptyTrades11111111111111111111111111111111111';
+    seedMeme({ ca, athMcap: 5_000_000, athTimestamp: 1_700_000_100_000 });
+
+    const fetcher = vi.fn(async () => []);
+
+    const result = await processNextUnbackfilledMeme(fetcher);
+    expect(result).toEqual({ ca, buyersCount: 0 });
+
+    // Should NOT be marked backfilled so it can be retried when API recovers
     const pending = getUnbackfilledMemes(10);
     expect(pending.find(m => m.ca === ca)).toBeDefined();
   });
@@ -444,13 +477,13 @@ describe('processUnbackfilledMemesBatch', () => {
 
     const results = await processUnbackfilledMemesBatch(2, fetcher);
     expect(results.length).toBe(2);
-    expect(results.map(r => r.ca)).toEqual([ca1, ca2]);
+    expect(results.map(r => r.ca)).toEqual([ca3, ca2]);
     expect(results.every(r => r.buyersCount === 1)).toBe(true);
 
-    // Tokens 1 and 2 should be backfilled, Token 3 remains pending
+    // Highest ATH tokens (Token 3: 7M, Token 2: 6M) processed first, Token 1 (5M) remains pending
     const remaining = getUnbackfilledMemes(10);
     expect(remaining.length).toBe(1);
-    expect(remaining[0].ca).toBe(ca3);
+    expect(remaining[0].ca).toBe(ca1);
   });
 
   it('returns empty array when queue is empty', async () => {
@@ -490,5 +523,122 @@ describe('fetchEarlyBuyerTrades', () => {
   it('returns an empty array cleanly when no API keys or providers fail', async () => {
     const res = await fetchEarlyBuyerTrades('So11111111111111111111111111111111111111112');
     expect(Array.isArray(res)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchPumpFunTrades
+// ---------------------------------------------------------------------------
+
+describe('fetchPumpFunTrades', () => {
+  it('returns empty array for EVM or empty CA', async () => {
+    expect(await fetchPumpFunTrades('')).toEqual([]);
+    expect(await fetchPumpFunTrades('0x1234567890123456789012345678901234567890')).toEqual([]);
+  });
+
+  it('extracts creator as slot-0 early buyer when pump.fun returns valid coin data', async () => {
+    const mockCoin = {
+      mint: 'TestPumpMint11111111111111111111111111111111',
+      creator: 'CreatorWallet1111111111111111111111111111111',
+      created_timestamp: 1_700_000_000_000,
+      ath_market_cap: 10_000_000,
+      ath_market_cap_timestamp: 1_700_000_500_000,
+      market_cap_usd: 5_000,
+      complete: true,
+      raydium_pool: 'Pool1111111111111111111111111111111111111111',
+    };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => mockCoin,
+    }));
+
+    try {
+      const trades = await fetchPumpFunTrades('TestPumpMint11111111111111111111111111111111');
+      expect(trades).toHaveLength(1);
+      expect(trades[0].wallet).toBe('CreatorWallet1111111111111111111111111111111');
+      expect(trades[0].isCreator).toBe(true);
+      expect(trades[0].pnl).toBe(1);
+      expect(trades.coinMetadata).toBeDefined();
+      expect(trades.coinMetadata.athMcap).toBe(10_000_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('handles 404 cleanly when token is not on pump.fun', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+    }));
+
+    try {
+      const trades = await fetchPumpFunTrades('NonPumpToken1111111111111111111111111111111');
+      expect(trades).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchBirdeyeTrades pagination
+// ---------------------------------------------------------------------------
+
+describe('fetchBirdeyeTrades pagination', () => {
+  it('returns empty array when ca is invalid or EVM', async () => {
+    expect(await fetchBirdeyeTrades('')).toEqual([]);
+    expect(await fetchBirdeyeTrades('0xabcdef')).toEqual([]);
+  });
+
+  it('paginates across multiple pages and stops when hasNext is false or items < 50', async () => {
+    const originalFetch = globalThis.fetch;
+    const originalKey = process.env.BIRDEYE_API_KEY;
+    process.env.BIRDEYE_API_KEY = 'test_key';
+
+    let pageCall = 0;
+    globalThis.fetch = vi.fn(async (url) => {
+      pageCall++;
+      if (pageCall === 1) {
+        // Page 1: 50 items
+        const items = Array.from({ length: 50 }, (_, i) => ({
+          owner: `Wallet_P1_${i}`,
+          blockUnixTime: 1_700_000 + i,
+          base: { price: 0.001 },
+        }));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items, hasNext: true } }),
+        };
+      } else if (pageCall === 2) {
+        // Page 2: 20 items (< 50 => end of stream)
+        const items = Array.from({ length: 20 }, (_, i) => ({
+          owner: `Wallet_P2_${i}`,
+          blockUnixTime: 1_700_100 + i,
+          base: { price: 0.002 },
+        }));
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { items, hasNext: false } }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: { items: [] } }) };
+    });
+
+    try {
+      const trades = await fetchBirdeyeTrades('TestToken11111111111111111111111111111111', { maxPages: 5 });
+      expect(trades).toHaveLength(70);
+      expect(pageCall).toBe(2);
+      expect(trades[0].wallet).toBe('Wallet_P1_0');
+      expect(trades[50].wallet).toBe('Wallet_P2_0');
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.env.BIRDEYE_API_KEY = originalKey;
+    }
   });
 });

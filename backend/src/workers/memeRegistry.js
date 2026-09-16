@@ -4,6 +4,12 @@ const STORE_KEY = 'tracked-memes';
 
 let memCache = null;
 
+export const SYSTEM_MINTS = new Set([
+  'So11111111111111111111111111111111111111112',
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+]);
+
 /**
  * Safe finite number parsing to avoid NaN/Infinity serializing to null in JSON.
  */
@@ -39,6 +45,7 @@ function loadRegistry() {
     for (const m of list) {
       if (!m || !m.ca) continue;
       const canonKey = canonicalizeCa(m.ca, m.chain);
+      if (SYSTEM_MINTS.has(canonKey)) continue;
       m.ca = canonKey;
       if (memCache.has(canonKey)) {
         const existing = memCache.get(canonKey);
@@ -89,7 +96,7 @@ export function upsertMeme(item) {
 
   const chain = (item.chain && typeof item.chain === 'string') ? item.chain : 'solana';
   const ca = canonicalizeCa(item.ca, chain);
-  if (!ca) return null;
+  if (!ca || SYSTEM_MINTS.has(ca)) return null;
 
   const reg = loadRegistry();
   const existing = reg.get(ca) || {
@@ -237,14 +244,20 @@ export function getTrackedMemes(filter = {}) {
 
 /**
  * Retrieve unbackfilled memes awaiting early buyer extraction by Worker 3.
- * Only returns memes that have athMcap > 0 since Worker 3 cannot calculate
- * buyer quotas or 25% ATH entry without a recorded ATH.
+ * Only returns memes that have athMcap > 0 and athTimestamp > 0 since Worker 3
+ * cannot calculate buyer quotas or 25% ATH entry without a recorded ATH.
  *
- * @param {number} limit
+ * @param {number} [limit=10]
+ * @param {string|null} [chain=null]
  * @returns {Array}
  */
-export function getUnbackfilledMemes(limit = 10) {
-  const list = getTrackedMemes({ backfilled: false }).filter(m => m.athMcap > 0);
+export function getUnbackfilledMemes(limit = 10, chain = null) {
+  let list = getTrackedMemes({ backfilled: false })
+    .filter(m => m.athMcap > 0 && m.athTimestamp > 0 && !SYSTEM_MINTS.has(m.ca));
+  if (chain) {
+    list = list.filter(m => m.chain === chain && (chain !== 'solana' || !m.ca.startsWith('0x')));
+  }
+  list.sort((a, b) => (b.athMcap || 0) - (a.athMcap || 0));
   if (limit == null || limit <= 0) return list;
   const parsedLimit = toSafeNumber(limit, 10);
   return list.slice(0, Math.max(0, parsedLimit));
