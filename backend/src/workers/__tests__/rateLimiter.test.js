@@ -149,13 +149,112 @@ describe('rateLimiter & Cloudflare Circuit Breaker', () => {
       return callCount;
     };
 
-    // Use dexscreener with small baseDelayMs artificially simulated
-    const start = Date.now();
     await executeWithThrottle('dexscreener', fn);
     await executeWithThrottle('dexscreener', fn);
 
     expect(callCount).toBe(2);
-    expect(timestamps[1] - timestamps[0]).toBeGreaterThanOrEqual(950); // Allowing slight timing jitter
+    expect(timestamps[1] - timestamps[0]).toBeGreaterThanOrEqual(950);
+  });
+
+  it('serializes concurrent parallel calls and enforces delay gap', async () => {
+    const timestamps = [];
+    const fn = async () => {
+      timestamps.push(Date.now());
+      return 'done';
+    };
+
+    // Fire 2 concurrent calls in parallel
+    await Promise.all([
+      executeWithThrottle('dexscreener', fn),
+      executeWithThrottle('dexscreener', fn),
+    ]);
+
+    expect(timestamps).toHaveLength(2);
+    expect(timestamps[1] - timestamps[0]).toBeGreaterThanOrEqual(950);
+  });
+
+  it('re-checks cooldown after waiting and prevents queued calls from resetting health', async () => {
+    let secondFnExecuted = false;
+    const err429 = new Error('429 Too Many Requests');
+    err429.status = 429;
+
+    const p1 = executeWithThrottle('gmgn', async () => {
+      throw err429;
+    });
+
+    const p2 = executeWithThrottle('gmgn', async () => {
+      secondFnExecuted = true;
+      return 'ok';
+    });
+
+    await expect(p1).rejects.toThrow();
+    await expect(p2).rejects.toThrow(/cooling down/i);
+
+    expect(secondFnExecuted).toBe(false);
+    const health = getEndpointHealth();
+    expect(health.gmgn.status).toBe('cooling_down');
+  });
+
+  it('recognizes various alternate 429 and 403 error formats', async () => {
+    const testCases = [
+      { name: 'err.statusCode = 429', err: Object.assign(new Error('err1'), { statusCode: 429 }) },
+      { name: 'err.statusCode = 403', err: Object.assign(new Error('err2'), { statusCode: 403 }) },
+      { name: 'err.response.status = 429', err: Object.assign(new Error('err3'), { response: { status: 429 } }) },
+      { name: 'err.response.status = 403', err: Object.assign(new Error('err4'), { response: { status: 403 } }) },
+      { name: 'err.status_code = 429', err: Object.assign(new Error('err5'), { status_code: 429 }) },
+      { name: 'err.status = "429"', err: Object.assign(new Error('err6'), { status: '429' }) },
+      { name: 'err.status = "403"', err: Object.assign(new Error('err7'), { status: '403' }) },
+      { name: 'err.message contains 429', err: new Error('Request failed with HTTP 429') },
+      { name: 'err.message contains 403', err: new Error('Cloudflare 403 Forbidden challenge') },
+    ];
+
+    for (let i = 0; i < testCases.length; i++) {
+      const endpoint = `endpoint_${i}`;
+      await expect(
+        executeWithThrottle(endpoint, async () => { throw testCases[i].err; })
+      ).rejects.toThrow();
+
+      const health = getEndpointHealth();
+      expect(health[endpoint].status).toBe('cooling_down');
+      expect(health[endpoint].coolingUntil).toBeGreaterThan(Date.now());
+    }
+  });
+
+  it('handles cooldown expiry correctly', async () => {
+    vi.useFakeTimers();
+    try {
+      const err429 = new Error('Too Many Requests');
+      err429.statusCode = 429;
+
+      await expect(
+        executeWithThrottle('dexscreener', async () => { throw err429; })
+      ).rejects.toThrow();
+
+      let health = getEndpointHealth();
+      expect(health.dexscreener.status).toBe('cooling_down');
+
+      // Immediate subsequent call is blocked
+      await expect(
+        executeWithThrottle('dexscreener', async () => 'not allowed')
+      ).rejects.toThrow(/cooling down/i);
+
+      // Advance time past the 60s cooldown (61s)
+      vi.advanceTimersByTime(61_000);
+
+      // Health reflects cooldown has expired
+      health = getEndpointHealth();
+      expect(health.dexscreener.status).toBe('degraded');
+
+      // Now call is allowed to execute and recovers health
+      const res = await executeWithThrottle('dexscreener', async () => 'recovered');
+      expect(res).toBe('recovered');
+
+      health = getEndpointHealth();
+      expect(health.dexscreener.status).toBe('healthy');
+      expect(health.dexscreener.consecutiveErrors).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('resets all endpoints when resetRateLimiter is called', async () => {
