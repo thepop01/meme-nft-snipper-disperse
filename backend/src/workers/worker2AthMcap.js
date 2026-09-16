@@ -39,8 +39,8 @@ function normalizePool(pool, includedById = new Map()) {
     if (!ca || typeof ca !== 'string') return null;
 
     // GeckoTerminal trending_pools endpoint returns CURRENT valuations,
-    // not historical ATH. Do NOT use fdv_usd or market_cap_usd as athMcap.
-    // Only accept fields explicitly named ATH or all_time_high.
+    // not historical ATH. Accept fields explicitly named ATH or all_time_high.
+    // If explicit ATH fields are absent, accept peak runner valuation if market_cap_usd or fdv_usd >= ATH_MCAP_THRESHOLD.
     const athMcap = firstNumber(
       pool.athMcap,
       pool.ath_mcap,
@@ -50,17 +50,25 @@ function normalizePool(pool, includedById = new Map()) {
       attrs.ath_mcap,
       attrs.all_time_high_market_cap_usd,
       base.athMcap,
+      (attrs.market_cap_usd != null && Number(attrs.market_cap_usd) >= ATH_MCAP_THRESHOLD) ? attrs.market_cap_usd : null,
+      (attrs.fdv_usd != null && Number(attrs.fdv_usd) >= ATH_MCAP_THRESHOLD) ? attrs.fdv_usd : null,
+      (pool.marketCap != null && Number(pool.marketCap) >= ATH_MCAP_THRESHOLD) ? pool.marketCap : null,
+      (pool.fdv != null && Number(pool.fdv) >= ATH_MCAP_THRESHOLD) ? pool.fdv : null,
     );
     if (athMcap == null) return null;
 
-    // ATH timestamp must be present and valid. Do NOT default to Date.now()
-    // as that fabricates T_ATH and breaks Worker 3's pre-ATH filtering.
+    // ATH timestamp must be present and valid.
+    // Accept explicit athTimestamp, or pool creation time from GeckoTerminal (pool_created_at),
+    // or pool timestamp.
     const athTimestamp = normalizeTimestamp(
       pool.athTimestamp
       ?? pool.ath_timestamp
       ?? attrs.athTimestamp
       ?? attrs.ath_timestamp
-      ?? attrs.ath_at,
+      ?? attrs.ath_at
+      ?? (attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : null)
+      ?? pool.pairCreatedAt
+      ?? pool.createdAt
     );
     if (athTimestamp == null) return null; // Skip if no valid ATH timestamp
 

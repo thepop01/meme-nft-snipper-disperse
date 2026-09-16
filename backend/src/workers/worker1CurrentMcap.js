@@ -94,7 +94,52 @@ export async function fetchCurrentMcapGt2m() {
     });
     if (!res.ok) throw new Error(`DexScreener boosts error ${res.status}`);
     const data = await res.json();
-    return responseItems(data).map(normalizeBoost).filter(Boolean);
+    const items = responseItems(data);
+    const normalized = items.map(normalizeBoost).filter(Boolean);
+    if (normalized.length > 0) {
+      return normalized;
+    }
+
+    // If items did not have embedded market caps (standard DexScreener boosts endpoint),
+    // resolve their actual pairs and market caps via DexScreener multi-token API.
+    const addrs = items
+      .filter(item => normalizeChain(item))
+      .map(item => item.tokenAddress || item.address || item.ca)
+      .filter(Boolean)
+      .slice(0, 30);
+
+    if (addrs.length === 0) return [];
+
+    try {
+      const pairsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${addrs.join(',')}`, {
+        signal: AbortSignal.timeout(8_000),
+        headers: { Accept: 'application/json' },
+      });
+      if (!pairsRes.ok) return [];
+      const pairsData = await pairsRes.json();
+      const pairs = pairsData.pairs || [];
+      const seen = new Set();
+      const out = [];
+
+      for (const p of pairs) {
+        const ca = p.baseToken?.address;
+        if (!ca || seen.has(ca)) continue;
+        const mcap = firstNumber(p.marketCap, p.fdv);
+        if (mcap == null || mcap < CURRENT_MCAP_THRESHOLD) continue;
+        seen.add(ca);
+        out.push({
+          ca,
+          name: p.baseToken?.name || p.baseToken?.symbol || 'Unknown',
+          symbol: p.baseToken?.symbol || '?',
+          chain: normalizeChain(p) || 'solana',
+          currentMcap: Number(mcap),
+          volume24hUsd: firstNumber(p.volume?.h24, p.volume24hUsd) || 0,
+        });
+      }
+      return out;
+    } catch (_) {
+      return [];
+    }
   });
 }
 

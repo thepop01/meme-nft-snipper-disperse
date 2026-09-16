@@ -158,4 +158,68 @@ describe('Worker 1 and Worker 2 discovery', () => {
     ]));
     expect(throttleCalls).toEqual(['dexscreener', 'geckoterminal']);
   });
+
+  it('Worker 1 resolves pairs and market caps when DexScreener boosts endpoint lacks embedded market caps', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          { tokenAddress: 'BoostedToken11111111111111111111111111111', chainId: 'solana' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          pairs: [
+            {
+              chainId: 'solana',
+              baseToken: { address: 'BoostedToken11111111111111111111111111111', name: 'Boosted', symbol: 'BOOST' },
+              marketCap: 2_800_000,
+              volume: { h24: 150_000 },
+            },
+          ],
+        }),
+      }));
+
+    const results = await fetchCurrentMcapGt2m();
+    expect(results).toEqual([
+      expect.objectContaining({
+        ca: 'BoostedToken11111111111111111111111111111',
+        name: 'Boosted',
+        symbol: 'BOOST',
+        currentMcap: 2_800_000,
+      }),
+    ]);
+  });
+
+  it('Worker 2 extracts peak runner valuation when GeckoTerminal attributes provide market_cap_usd >= 4M and pool_created_at', async () => {
+    const createdIso = '2026-09-10T12:00:00Z';
+    const expectedTs = new Date(createdIso).getTime();
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: 'solana_GeckoRunner111111111111111111111111111111111',
+            attributes: {
+              base_token_address: 'GeckoRunner111111111111111111111111111111111',
+              name: 'Gecko Runner / SOL',
+              market_cap_usd: '5200000',
+              pool_created_at: createdIso,
+            },
+          },
+        ],
+      }),
+    }));
+
+    const results = await fetchAthMcapGt4m();
+    expect(results).toEqual([
+      expect.objectContaining({
+        ca: 'GeckoRunner111111111111111111111111111111111',
+        athMcap: 5_200_000,
+        athTimestamp: expectedTs,
+      }),
+    ]);
+  });
 });
