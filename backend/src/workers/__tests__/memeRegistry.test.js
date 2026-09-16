@@ -5,6 +5,7 @@ import {
   getUnbackfilledMemes,
   markMemeBackfilled,
   resetMemeRegistry,
+  canonicalizeCa,
 } from '../memeRegistry.js';
 
 describe('memeRegistry shared store', () => {
@@ -56,6 +57,142 @@ describe('memeRegistry shared store', () => {
     expect(token.sourceFlags).toEqual(['current_gt_2m', 'ath_gt_4m', 'extra_signal']);
     expect(token.backfilled).toBe(false);
     expect(token.backfilledAt).toBeNull();
+  });
+
+  it('canonicalizes EVM contract addresses to lowercase while preserving Solana Base58 case', () => {
+    // EVM address in checksummed format
+    const evmChecksum = '0x1F9840aADC5d4367d1214ab5c8f8b3400a40f12B';
+    const evmLower = '0x1f9840aadc5d4367d1214ab5c8f8b3400a40f12b';
+
+    upsertMeme({
+      ca: evmChecksum,
+      chain: 'robinhood',
+      name: 'UniswapToken',
+      symbol: 'UNI',
+      currentMcap: 2_500_000,
+      athMcap: 5_000_000,
+    });
+
+    // Subsequent upsert with lowercase address
+    upsertMeme({
+      ca: evmLower,
+      chain: 'robinhood',
+      currentMcap: 2_800_000,
+      source: 'current_gt_2m',
+    });
+
+    const evmMemes = getTrackedMemes({ chain: 'robinhood' });
+    expect(evmMemes).toHaveLength(1);
+    expect(evmMemes[0].ca).toBe(evmLower);
+    expect(evmMemes[0].currentMcap).toBe(2_800_000);
+    expect(evmMemes[0].sourceFlags).toContain('current_gt_2m');
+
+    // markMemeBackfilled works using checksummed address
+    const marked = markMemeBackfilled(evmChecksum);
+    expect(marked).not.toBeNull();
+    expect(marked.ca).toBe(evmLower);
+    expect(marked.backfilled).toBe(true);
+
+    // Solana Base58 case-sensitivity: addresses with different casing are distinct mints
+    const solanaUpper = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+    const solanaLower = 'dezxaz8z7pnrnrjjz3wxborgixca6xjnb7yab1ppb263';
+
+    upsertMeme({ ca: solanaUpper, chain: 'solana', name: 'BonkUpper' });
+    upsertMeme({ ca: solanaLower, chain: 'solana', name: 'BonkLower' });
+
+    const solanaMemes = getTrackedMemes({ chain: 'solana' });
+    expect(solanaMemes).toHaveLength(2);
+    expect(solanaMemes.some(m => m.ca === solanaUpper)).toBe(true);
+    expect(solanaMemes.some(m => m.ca === solanaLower)).toBe(true);
+  });
+
+  it('maintains ATH and T_ATH integrity without drift on equal ATH periodic polls', () => {
+    const ca = 'SolanaAthTestToken1111111111111111111111111';
+
+    // 1. Worker 1 token reporting only currentMcap does NOT synthesize athMcap
+    const w1Token = upsertMeme({
+      ca,
+      name: 'AthTest',
+      currentMcap: 2_500_000,
+      source: 'current_gt_2m',
+    });
+    expect(w1Token.currentMcap).toBe(2_500_000);
+    expect(w1Token.athMcap).toBe(0);
+    expect(w1Token.athTimestamp).toBe(0);
+
+    // 2. Initial ATH recorded by Worker 2
+    const initialAth = upsertMeme({
+      ca,
+      athMcap: 5_000_000,
+      athTimestamp: 1000,
+      source: 'ath_gt_4m',
+    });
+    expect(initialAth.athMcap).toBe(5_000_000);
+    expect(initialAth.athTimestamp).toBe(1000);
+
+    // 3. Periodic poll with equal ATH and later timestamp must NOT move T_ATH forward
+    const equalPoll = upsertMeme({
+      ca,
+      athMcap: 5_000_000,
+      athTimestamp: 2000,
+    });
+    expect(equalPoll.athMcap).toBe(5_000_000);
+    expect(equalPoll.athTimestamp).toBe(1000); // Preserved! No drift!
+
+    // 4. Poll with strictly higher ATH updates both athMcap and athTimestamp
+    const higherAth = upsertMeme({
+      ca,
+      athMcap: 6_500_000,
+      athTimestamp: 3000,
+    });
+    expect(higherAth.athMcap).toBe(6_500_000);
+    expect(higherAth.athTimestamp).toBe(3000);
+
+    // 5. Current market cap exceeding ATH elevates athMcap and updates athTimestamp
+    const newCurrentHigh = upsertMeme({
+      ca,
+      currentMcap: 8_000_000,
+      athTimestamp: 4000,
+    });
+    expect(newCurrentHigh.currentMcap).toBe(8_000_000);
+    expect(newCurrentHigh.athMcap).toBe(8_000_000);
+    expect(newCurrentHigh.athTimestamp).toBe(4000);
+  });
+
+  it('getUnbackfilledMemes filters only tokens with athMcap > 0 for Worker 3', () => {
+    // Worker 1 token with currentMcap > 2M but no ATH yet
+    upsertMeme({
+      ca: 'Worker1NoAth1111111111111111111111111111111',
+      name: 'NoAthToken',
+      currentMcap: 3_000_000,
+      source: 'current_gt_2m',
+    });
+
+    // Worker 2 token with known ATH
+    upsertMeme({
+      ca: 'Worker2WithAth11111111111111111111111111111',
+      name: 'WithAthToken',
+      currentMcap: 2_200_000,
+      athMcap: 5_000_000,
+      athTimestamp: 1000,
+      source: 'ath_gt_4m',
+    });
+
+    let unbackfilled = getUnbackfilledMemes();
+    // Worker1NoAth must be excluded because athMcap === 0
+    expect(unbackfilled).toHaveLength(1);
+    expect(unbackfilled[0].ca).toBe('Worker2WithAth11111111111111111111111111111');
+
+    // When Worker 2 later populates ATH for Worker1NoAth, it becomes eligible for Worker 3
+    upsertMeme({
+      ca: 'Worker1NoAth1111111111111111111111111111111',
+      athMcap: 4_500_000,
+      athTimestamp: 1200,
+    });
+
+    unbackfilled = getUnbackfilledMemes();
+    expect(unbackfilled).toHaveLength(2);
+    expect(unbackfilled.some(m => m.ca === 'Worker1NoAth1111111111111111111111111111111')).toBe(true);
   });
 
   it('updating Mcap / ATH does not overwrite backfilled: true or backfilledAt', () => {
@@ -147,7 +284,7 @@ describe('memeRegistry shared store', () => {
     expect(getTrackedMemes({ backfilled: true })).toHaveLength(1);
     expect(getTrackedMemes({ backfilled: true })[0].ca).toBe('SolanaToken1');
     expect(getTrackedMemes({ backfilled: false })).toHaveLength(1);
-    expect(getTrackedMemes({ backfilled: false })[0].ca).toBe('RobinhoodToken1');
+    expect(getTrackedMemes({ backfilled: false })[0].ca).toBe('robinhoodtoken1');
 
     // Filter by backfilled (string from query params)
     expect(getTrackedMemes({ backfilled: 'true' })).toHaveLength(1);
@@ -170,7 +307,7 @@ describe('memeRegistry shared store', () => {
     expect(getTrackedMemes()).toHaveLength(2);
   });
 
-  it('handles edge cases in upsertMeme properly', () => {
+  it('handles edge cases and robust finite number parsing in upsertMeme', () => {
     expect(upsertMeme(null)).toBeNull();
     expect(upsertMeme({})).toBeNull();
     expect(upsertMeme({ ca: '' })).toBeNull();
@@ -187,13 +324,24 @@ describe('memeRegistry shared store', () => {
     expect(minimal.backfilled).toBe(false);
     expect(minimal.backfilledAt).toBeNull();
 
+    // Robust finite number conversion on NaN, strings, Infinity
+    const robust = upsertMeme({
+      ca: 'MinimalCA',
+      currentMcap: NaN,
+      athMcap: Infinity,
+      volume24hUsd: 'not_a_number',
+    });
+    expect(robust.currentMcap).toBe(0);
+    expect(robust.athMcap).toBe(0);
+    expect(robust.volume24hUsd).toBe(0);
+
     // ATH is not lowered if new athMcap is lower
     upsertMeme({ ca: 'MinimalCA', athMcap: 8_000_000, athTimestamp: 1000 });
     const afterLower = upsertMeme({ ca: 'MinimalCA', athMcap: 5_000_000, athTimestamp: 2000 });
     expect(afterLower.athMcap).toBe(8_000_000);
     expect(afterLower.athTimestamp).toBe(1000);
 
-    // If currentMcap exceeds athMcap, athMcap expands to match currentMcap
+    // If currentMcap exceeds athMcap for a token with existing athMcap > 0, athMcap expands
     const afterHigherCurrent = upsertMeme({ ca: 'MinimalCA', currentMcap: 10_000_000 });
     expect(afterHigherCurrent.currentMcap).toBe(10_000_000);
     expect(afterHigherCurrent.athMcap).toBe(10_000_000);

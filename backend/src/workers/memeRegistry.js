@@ -22,26 +22,57 @@ function persist() {
 }
 
 /**
+ * Safe finite number parsing to avoid NaN/Infinity serializing to null in JSON.
+ */
+function toSafeNumber(val, fallback = 0) {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Canonicalize contract address.
+ * EVM addresses (Robinhood or starting with '0x') are lowercased.
+ * Solana Base58 addresses remain strictly case-sensitive.
+ *
+ * @param {string} ca
+ * @param {string} [chain]
+ * @returns {string}
+ */
+export function canonicalizeCa(ca, chain) {
+  if (!ca || typeof ca !== 'string') return '';
+  const trimmed = ca.trim();
+  if (!trimmed) return '';
+  if (chain === 'robinhood' || trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+    return trimmed.toLowerCase();
+  }
+  return trimmed;
+}
+
+/**
  * Upsert a meme coin into the shared deduplicated tracked_memes registry.
- * Deduplicated by contract address (ca).
+ * Deduplicated by canonicalized contract address (ca).
  * Merges sourceFlags without losing previous tags.
  * Preserves backfilled: true across subsequent updates.
+ * Preserves T_ATH integrity against equal ATH polls.
  *
  * @param {Object} item
  * @returns {Object|null}
  */
 export function upsertMeme(item) {
-  if (!item || !item.ca || typeof item.ca !== 'string' || !item.ca.trim()) {
+  if (!item || !item.ca || typeof item.ca !== 'string') {
     return null;
   }
 
-  const ca = item.ca.trim();
+  const chain = (item.chain && typeof item.chain === 'string') ? item.chain : 'solana';
+  const ca = canonicalizeCa(item.ca, chain);
+  if (!ca) return null;
+
   const reg = loadRegistry();
   const existing = reg.get(ca) || {
     ca,
     name: item.name || 'Unknown',
     symbol: item.symbol || '?',
-    chain: item.chain || 'solana',
+    chain,
     currentMcap: 0,
     athMcap: 0,
     athTimestamp: 0,
@@ -57,37 +88,40 @@ export function upsertMeme(item) {
   if (item.chain && typeof item.chain === 'string') existing.chain = item.chain;
 
   if (item.currentMcap != null) {
-    existing.currentMcap = Number(item.currentMcap);
+    existing.currentMcap = toSafeNumber(item.currentMcap, 0);
   }
 
+  // ATH Market Cap & Timestamp (T_ATH) Integrity
   if (item.athMcap != null) {
-    const newAth = Number(item.athMcap);
-    if (newAth >= existing.athMcap) {
+    const newAth = toSafeNumber(item.athMcap, 0);
+    if (newAth > existing.athMcap) {
       existing.athMcap = newAth;
-      if (item.athTimestamp) {
-        existing.athTimestamp = Number(item.athTimestamp);
+      if (item.athTimestamp != null) {
+        existing.athTimestamp = toSafeNumber(item.athTimestamp, 0);
+      } else {
+        existing.athTimestamp = Date.now();
+      }
+    } else if (newAth === existing.athMcap) {
+      // Do NOT update athTimestamp on equal ATH (>=) polls because periodic polls
+      // with current timestamps would move T_ATH forward.
+      // Only set if !existing.athTimestamp
+      if (!existing.athTimestamp && item.athTimestamp != null) {
+        existing.athTimestamp = toSafeNumber(item.athTimestamp, 0);
       }
     }
-  } else if (existing.athMcap === 0 && existing.currentMcap > 0) {
-    existing.athMcap = existing.currentMcap;
-    if (item.athTimestamp) {
-      existing.athTimestamp = Number(item.athTimestamp);
-    } else if (!existing.athTimestamp) {
-      existing.athTimestamp = Date.now();
-    }
   }
 
-  // ATH cannot logically be lower than current market cap
-  if (existing.currentMcap > existing.athMcap) {
+  // When currentMcap > existing.athMcap:
+  // Update existing.athMcap = existing.currentMcap and set existing.athTimestamp = item.athTimestamp || Date.now()
+  // Do NOT synthesize athMcap = currentMcap for Worker 1 tokens that only report currentMcap if they don't have an ATH yet;
+  // keep athMcap: 0, athTimestamp: 0 until Worker 2 or an ATH source populates it.
+  if (existing.athMcap > 0 && existing.currentMcap > existing.athMcap) {
     existing.athMcap = existing.currentMcap;
-  }
-
-  if (item.athTimestamp && !existing.athTimestamp) {
-    existing.athTimestamp = Number(item.athTimestamp);
+    existing.athTimestamp = item.athTimestamp != null ? toSafeNumber(item.athTimestamp, 0) : Date.now();
   }
 
   if (item.volume24hUsd != null) {
-    existing.volume24hUsd = Number(item.volume24hUsd);
+    existing.volume24hUsd = toSafeNumber(item.volume24hUsd, 0);
   }
 
   // Merge source flags
@@ -147,15 +181,23 @@ export function getTrackedMemes(filter = {}) {
   }
 
   if (filter.ca) {
-    list = list.filter(m => m.ca === filter.ca);
+    const targetCa = canonicalizeCa(filter.ca, filter.chain);
+    list = list.filter(
+      m =>
+        m.ca === targetCa ||
+        ((m.chain === 'robinhood' || m.ca.startsWith('0x')) &&
+          m.ca.toLowerCase() === targetCa.toLowerCase())
+    );
   }
 
   if (filter.minMcap != null) {
-    list = list.filter(m => m.currentMcap >= Number(filter.minMcap));
+    const minMcap = toSafeNumber(filter.minMcap, 0);
+    list = list.filter(m => m.currentMcap >= minMcap);
   }
 
   if (filter.minAth != null) {
-    list = list.filter(m => m.athMcap >= Number(filter.minAth));
+    const minAth = toSafeNumber(filter.minAth, 0);
+    list = list.filter(m => m.athMcap >= minAth);
   }
 
   return list;
@@ -163,14 +205,17 @@ export function getTrackedMemes(filter = {}) {
 
 /**
  * Retrieve unbackfilled memes awaiting early buyer extraction by Worker 3.
+ * Only returns memes that have athMcap > 0 since Worker 3 cannot calculate
+ * buyer quotas or 25% ATH entry without a recorded ATH.
  *
  * @param {number} limit
  * @returns {Array}
  */
 export function getUnbackfilledMemes(limit = 10) {
-  const list = getTrackedMemes({ backfilled: false });
+  const list = getTrackedMemes({ backfilled: false }).filter(m => m.athMcap > 0);
   if (limit == null) return list;
-  return list.slice(0, Math.max(0, Number(limit)));
+  const parsedLimit = toSafeNumber(limit, 10);
+  return list.slice(0, Math.max(0, parsedLimit));
 }
 
 /**
@@ -181,8 +226,17 @@ export function getUnbackfilledMemes(limit = 10) {
  */
 export function markMemeBackfilled(ca) {
   if (!ca || typeof ca !== 'string') return null;
+  const trimmed = ca.trim();
+  if (!trimmed) return null;
   const reg = loadRegistry();
-  const m = reg.get(ca.trim());
+
+  let m = reg.get(trimmed);
+  if (!m && (trimmed.startsWith('0x') || trimmed.startsWith('0X'))) {
+    m = reg.get(trimmed.toLowerCase());
+  }
+  if (!m) {
+    m = reg.get(trimmed.toLowerCase());
+  }
   if (!m) return null;
 
   m.backfilled = true;
