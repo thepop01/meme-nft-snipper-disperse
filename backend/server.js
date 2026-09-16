@@ -1,5 +1,6 @@
 // TradeForge sniper backend: REST API + WebSocket event stream.
 // Run with: node server.js   (copy .env.example to .env first)
+// Loaded with local dev CORS enabled
 import express from 'express';
 import cors from 'cors';
 import http from 'node:http';
@@ -9,6 +10,8 @@ import { getWalletAddress } from './src/wallet.js';
 import { onEvent, log, getLogs } from './src/bus.js';
 import { startPumpFeed } from './src/discovery/pumpfun.js';
 import { createPool, migrate } from './src/tape/db.js';
+import { initSmartWalletsTable } from './src/smartwallets/db.js';
+import { initMemeTokensTable } from './src/discovery/db.js';
 import { Tape } from './src/tape/tape.js';
 import { systemClock } from './src/discovery/clock.js';
 import { BaselineController } from './src/discovery/baselineController.js';
@@ -17,7 +20,7 @@ import { IngestionStats } from './src/discovery/ingestionStats.js';
 import { StructuralEvidenceCollector } from './src/discovery/structuralEvidence.js';
 import { SolanaStructuralRpc, solanaResolvers } from './src/discovery/solanaStructuralRpc.js';
 import { startRaydiumFeed } from './src/discovery/raydium.js';
-import { getTokens, getToken } from './src/discovery/registry.js';
+import { getTokens, getToken, setTokenDb } from './src/discovery/registry.js';
 import {
   getBots, createBot, updateBot, deleteBot, startBot, stopBot, getWatchlist, PRESETS,
 } from './src/engine/botManager.js';
@@ -45,28 +48,33 @@ import { startAttentionPoll } from './src/analysis/attention.js';
 import { startMoversFeed } from './src/discovery/movers.js';
 import { createWalletRouter } from './src/wallets/routes.js';
 import { createSmartWalletsRouter } from './src/smartwallets/routes.js';
+import { startSmartWalletFinder } from './src/smartwallets/finder.js';
+import { startAllWorkers, stopAllWorkers, getWorkerStatus } from './src/workers/workerManager.js';
+import { getTrackedMemes } from './src/workers/memeRegistry.js';
 import { getFills, pnlSummary } from './src/engine/accounting.js';
 import { resolveWallets } from './src/wallets/repository.js';
 import { prepareExternalTrade, reconcileExternalTrade } from './src/trading/externalTrading.js';
 import { executionAdapter, marketDataAdapter, portfolioAdapter } from './src/adapters/localAdapters.js';
 import { listActivity } from './src/operations/activity.js';
 import { getProviderHealth } from './src/operations/providerHealth.js';
+import {
+  createAuthMiddleware,
+  createCorsOptions,
+  maskRpcUrl,
+  requestHasValidWebSocketToken,
+} from './src/security.js';
 
 const app = express();
-app.use(cors());
+app.use(cors(createCorsOptions({ corsOrigins: config.corsOrigins })));
 app.use(express.json());
 
-// Bearer-token auth. When API_TOKEN is set, every /api request must send
-// `Authorization: Bearer <token>` (or ?token=). Without it the server is
-// open — acceptable only when bound to localhost.
-function checkAuth(req, res, next) {
-  if (!config.apiToken) return next();
-  const header = String(req.headers.authorization || '');
-  const token = header.startsWith('Bearer ') ? header.slice(7) : req.query.token;
-  if (token === config.apiToken) return next();
-  res.status(401).json({ error: 'Unauthorized — set the API token (Authorization: Bearer <token>)' });
-}
-app.use('/api', checkAuth);
+// Every API request requires an Authorization Bearer token unless the process
+// is explicitly running in local development/test mode. Tokens in URLs are
+// intentionally not accepted because URLs are routinely logged and retained.
+app.use('/api', createAuthMiddleware({
+  apiToken: config.apiToken,
+  allowUnauthenticated: config.allowUnauthenticated,
+}));
 const ingestionClock = systemClock;
 const ingestionStats = new IngestionStats();
 const monitorBudget = new MonitorBudget({ cfg: config.collection, rng: Math.random });
@@ -76,23 +84,15 @@ const baselineController = new BaselineController({
 const asyncRoute = (fn) => (req, res) =>
   Promise.resolve(fn(req, res)).catch(err => res.status(err.status || 400).json({ error: err.message }));
 
-function maskRpcUrl(url) {
-  try {
-    const u = new URL(url);
-    for (const key of [...u.searchParams.keys()]) {
-      if (/key|token|secret/i.test(key)) u.searchParams.set(key, '***');
-    }
-    u.pathname = u.pathname.split('/')
-      .map(seg => /^[0-9a-zA-Z_-]{20,}$/.test(seg) ? '***' : seg)
-      .join('/');
-    return u.toString();
-  } catch {
-    return url.replace(/api-key=[^&]+/, 'api-key=***');
-  }
-}
+const dbPool = createPool();
+
 app.use('/api/disperse', createDisperseRouter());
 app.use('/api/wallets', createWalletRouter());
-app.use('/api/smart-wallets', createSmartWalletsRouter({ getTokens: () => getTokens({ view: 'all' }) }));
+app.use('/api/smart-wallets', createSmartWalletsRouter({ getTokens: () => getTokens({ view: 'all' }), db: dbPool }));
+
+// --- Worker Manager & Meme Registry ---
+app.get('/api/workers/status', (req, res) => res.json(getWorkerStatus()));
+app.get('/api/memes/registry', (req, res) => res.json({ memes: getTrackedMemes(req.query) }));
 
 // --- Alerts ---
 app.get('/api/alerts', (req, res) => res.json({ alerts: listAlerts() }));
@@ -129,7 +129,12 @@ app.get('/api/v2/execution/capabilities/:chainId', (req, res) => res.json({ capa
 app.get('/api/v2/portfolio/:walletAddress', asyncRoute(async (req, res) => res.json({ snapshot: await portfolioAdapter.syncWallet({ address: req.params.walletAddress }) })));
 
 // --- Tracked tier (Phase 2) ---
-app.get('/api/tracked', (req, res) => res.json({ tracked: getTracked() }));
+app.get('/api/tracked', (req, res) => {
+  let tracked = getTracked();
+  const { chain } = req.query;
+  if (chain) tracked = tracked.filter(t => (t.chain || 'solana') === chain);
+  res.json({ tracked });
+});
 app.post('/api/tracked', asyncRoute((req, res) => {
   const { mint, reason } = req.body;
   if (!mint) throw new Error('mint is required');
@@ -174,7 +179,8 @@ app.get('/api/status', (req, res) => {
 app.get('/api/tokens', (req, res) => {
   const { view, minScore, minLiquidity, source, maxAgeMin, chain } = req.query;
   const page = Math.max(1, Number(req.query.page) || 1);
-  const pageSize = Math.min(500, Math.max(1, Number(req.query.pageSize ?? req.query.limit) || 100));
+  const isAll = req.query.limit === 'all' || req.query.pageSize === 'all';
+  const pageSize = isAll ? 100000 : Math.min(10000, Math.max(1, Number(req.query.pageSize ?? req.query.limit) || 100));
   const all = getTokens({
       view: view === 'discovered' ? 'discovered' : view === 'all' ? 'all' : 'curated',
       minScore: minScore ? Number(minScore) : undefined,
@@ -251,15 +257,20 @@ app.get('/api/pnl', (req, res) => {
 // --- Manual trading ---
 app.post('/api/trade/buy', asyncRoute(async (req, res) => {
   if (!config.dryRun && !config.allowServerSigner) throw new Error('Use connected-wallet preparation for live trading');
-  const { mint, solAmount, slippagePct, takeProfitPct, stopLossPct, trailingStopPct, maxHoldMin } = req.body;
+  const { mint, solAmount, slippagePct, takeProfitPct, stopLossPct, trailingStopPct, maxHoldMin, idempotencyKey } = req.body;
   if (!mint || !solAmount) throw new Error('mint and solAmount are required');
   const numSol = Number(solAmount);
   if (!isFinite(numSol) || numSol <= 0) throw new Error('solAmount must be a positive number');
   const token = getToken(mint);
   if (!token) throw new Error('Token not in registry — it may have expired from the feed');
 
-  const buyResult = await executeBuy(token, { solAmount: numSol, slippagePct: Number(slippagePct) || 10 });
+  const buyResult = await executeBuy(token, {
+    solAmount: numSol,
+    slippagePct: Number(slippagePct) || 10,
+    idempotencyKey: idempotencyKey || `manual:buy:${mint}:${numSol}`,
+  });
   buyResult.solSpent = numSol;
+  if (req.body.walletAddress) buyResult.walletAddress = req.body.walletAddress;
   const position = await openPosition(token, buyResult, {
     takeProfitPct: takeProfitPct ? Number(takeProfitPct) : null,
     stopLossPct: stopLossPct ? Number(stopLossPct) : null,
@@ -272,11 +283,13 @@ app.post('/api/trade/buy', asyncRoute(async (req, res) => {
 
 app.post('/api/trade/sell', asyncRoute(async (req, res) => {
   if (!config.dryRun && !config.allowServerSigner) throw new Error('Use connected-wallet preparation for live trading');
-  const { positionId, fraction } = req.body;
+  const { positionId, fraction, idempotencyKey } = req.body;
   if (!positionId) throw new Error('positionId is required');
   const numFrac = Number(fraction) || 1;
   if (!isFinite(numFrac) || numFrac <= 0 || numFrac > 1) throw new Error('fraction must be between 0 and 1');
-  const position = await closePosition(positionId, numFrac, 'manual');
+  const position = await closePosition(positionId, numFrac, 'manual', null, {
+    idempotencyKey: idempotencyKey || `manual:sell:${positionId}:${numFrac}`,
+  });
   res.json({ position });
 }));
 
@@ -310,15 +323,21 @@ app.get('/api/ingestion/stats', (req, res) => res.json(ingestionStats.snapshot()
 
 // --- HTTP + WebSocket ---
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  // The browser sends the bearer token as a subprotocol because it cannot set
+  // Authorization during the WebSocket upgrade. Echoing the selected protocol
+  // keeps the browser handshake valid without putting the token in a URL.
+  handleProtocols(protocols) {
+    return [...protocols].find(protocol => protocol.startsWith('bearer.')) || false;
+  },
+});
 
 wss.on('connection', (socket, req) => {
-  if (config.apiToken) {
-    const url = new URL(req.url, 'http://localhost');
-    if (url.searchParams.get('token') !== config.apiToken) {
-      socket.close(4401, 'Unauthorized');
-      return;
-    }
+  if (!config.allowUnauthenticated && !requestHasValidWebSocketToken(req, config.apiToken)) {
+    socket.close(4401, 'Unauthorized');
+    return;
   }
   socket.send(JSON.stringify({ type: 'hello', dryRun: config.dryRun }));
 });
@@ -330,30 +349,37 @@ onEvent((event) => {
   }
 });
 
-server.listen(config.port, async () => {
-  log('info', `Sniper backend listening on http://localhost:${config.port}`);
+server.listen(config.port, config.host, async () => {
+  log('info', `Sniper backend listening on http://${config.host}:${config.port}`);
   log('info', config.dryRun
     ? 'DRY_RUN enabled — all trades are simulated (paper trading)'
     : 'LIVE TRADING enabled — trades will spend real SOL');
+  let tape = null;
   try {
-    const tapePool = createPool();
-    await migrate(tapePool);
-    const tape = new Tape(tapePool);
+    await migrate(dbPool);
+    await initSmartWalletsTable(dbPool);
+    await initMemeTokensTable(dbPool);
+    setTokenDb(dbPool);
+    tape = new Tape(dbPool);
+    log('info', '[tape] Postgres event tape, smart wallet store & meme tokens ready');
+  } catch (error) {
+    log('warn', `[tape] Postgres event tape unavailable (${error.message}); using fallback tape`);
+    tape = { append: async () => true };
+  }
+  try {
     const structuralRpc = new SolanaStructuralRpc({ rpcUrl: config.rpcUrl, clock: ingestionClock, maxRequestsPerMinute: config.structuralEvidence.maxRequestsPerMinute });
     const structuralEvidence = new StructuralEvidenceCollector({
       tape, rpc: structuralRpc, resolvers: solanaResolvers,
       fundingSourceFor: structuralRpc.fundingSourceFor.bind(structuralRpc),
       walletAge: structuralRpc.walletAge.bind(structuralRpc),
-      // Rich wallet profiling is intentionally unavailable until WS6 gets a validated provider contract.
       richProfile: async () => null, cfg: config.structuralEvidence, clock: ingestionClock,
       concurrency: config.structuralEvidence.concurrency,
     });
-    log('info', '[tape] Postgres event tape ready');
     startPumpFeed(tape, {
       baseline: baselineController, budget: monitorBudget, stats: ingestionStats, structuralEvidence, clock: ingestionClock,
     });
   } catch (error) {
-    log('error', `[tape] PumpPortal ingestion disabled: ${error.message}`);
+    log('error', `[tape] PumpPortal start failed: ${error.message}`);
   }
   startRaydiumFeed();
   startEvmFeeds(); // Robinhood discovery (EVM terminal is Robinhood-only)
@@ -366,4 +392,7 @@ server.listen(config.port, async () => {
   startRefreshLoop();
   startAttentionPoll(); // Phase 4: DexScreener boosts + socials attention signals
   startMoversFeed(); // Movers & Revivals: catch aged tokens waking up (e.g. Udin)
+  startSmartWalletFinder({ db: dbPool }); // Phase 5: Automatic smart wallet discovery for Solana + Robinhood
+  startAllWorkers({ autoRun: true }); // Task 7: Start distributed 5-worker pipeline
 });
+
