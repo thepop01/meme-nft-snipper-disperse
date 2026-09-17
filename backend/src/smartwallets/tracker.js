@@ -299,11 +299,21 @@ export function findRunners(tokens, now = Date.now(), minAth = MIN_RUNNER_ATH) {
     }));
 }
 
+let cachedWalletsDoc = null;
+
+export function clearWalletsCache() {
+  cachedWalletsDoc = null;
+}
+
 export function loadWallets() {
-  return load(STORE_KEY, { updatedAt: null, wallets: [], runners: [] });
+  if (!cachedWalletsDoc) {
+    cachedWalletsDoc = load(STORE_KEY, { updatedAt: null, wallets: [], runners: [] });
+  }
+  return cachedWalletsDoc;
 }
 
 export function saveWallets(doc) {
+  cachedWalletsDoc = doc;
   save(STORE_KEY, { ...doc, updatedAt: new Date().toISOString() });
 }
 
