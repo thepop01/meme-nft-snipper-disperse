@@ -1,3 +1,4 @@
+import '../config.js';
 import { runWorker1Pass } from './worker1CurrentMcap.js';
 import { runWorker2Pass } from './worker2AthMcap.js';
 import { runHistoricalSolanaHarvest } from './historicalDiscovery.js';

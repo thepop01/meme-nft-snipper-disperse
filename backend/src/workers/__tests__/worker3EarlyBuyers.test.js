@@ -10,6 +10,7 @@ vi.mock('../../store.js', () => {
 });
 
 import { upsertMeme, getUnbackfilledMemes, resetMemeRegistry } from '../memeRegistry.js';
+import { resetRateLimiter } from '../rateLimiter.js';
 import { loadWallets } from '../../smartwallets/tracker.js';
 import {
   calculateFirstBuyersQuota,
@@ -521,8 +522,17 @@ describe('processUnbackfilledMemesBatch', () => {
 
 describe('fetchEarlyBuyerTrades', () => {
   it('returns an empty array cleanly when no API keys or providers fail', async () => {
-    const res = await fetchEarlyBuyerTrades('So11111111111111111111111111111111111111112');
-    expect(Array.isArray(res)).toBe(true);
+    const origBirdeye = process.env.BIRDEYE_API_KEY;
+    const origHelius = process.env.HELIUS_API_KEY;
+    delete process.env.BIRDEYE_API_KEY;
+    delete process.env.HELIUS_API_KEY;
+    try {
+      const res = await fetchEarlyBuyerTrades('So11111111111111111111111111111111111111112');
+      expect(Array.isArray(res)).toBe(true);
+    } finally {
+      if (origBirdeye) process.env.BIRDEYE_API_KEY = origBirdeye;
+      if (origHelius) process.env.HELIUS_API_KEY = origHelius;
+    }
   });
 });
 
@@ -589,6 +599,10 @@ describe('fetchPumpFunTrades', () => {
 // ---------------------------------------------------------------------------
 
 describe('fetchBirdeyeTrades pagination', () => {
+  beforeEach(() => {
+    resetRateLimiter();
+  });
+
   it('returns empty array when ca is invalid or EVM', async () => {
     expect(await fetchBirdeyeTrades('')).toEqual([]);
     expect(await fetchBirdeyeTrades('0xabcdef')).toEqual([]);

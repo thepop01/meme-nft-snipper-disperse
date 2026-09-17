@@ -1,3 +1,4 @@
+import '../config.js';
 import { getUnbackfilledMemes, markMemeBackfilled, SYSTEM_MINTS } from './memeRegistry.js';
 import { loadWallets, saveWallets, upsertWallets } from '../smartwallets/tracker.js';
 import { executeWithThrottle } from './rateLimiter.js';
