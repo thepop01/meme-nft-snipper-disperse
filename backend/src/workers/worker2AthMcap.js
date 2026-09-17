@@ -126,6 +126,53 @@ export async function fetchAthMcapGt4m() {
   });
 }
 
+/**
+ * Fetch ATH market-cap candidates from Pump.fun's API (ATH mcap >= $4M with verified timestamp).
+ */
+export async function fetchPumpFunAthMcap({ maxOffset = 300, minAthMcap = ATH_MCAP_THRESHOLD } = {}) {
+  return executeWithThrottle('pumpfun', async () => {
+    const out = [];
+    const seen = new Set();
+    for (let offset = 0; offset <= maxOffset; offset += 50) {
+      try {
+        const res = await fetch(`https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=50&sort=market_cap&order=DESC&includeNsfw=false`, {
+          signal: AbortSignal.timeout(8_000),
+          headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+        });
+        if (!res.ok) break;
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) break;
+        for (const coin of data) {
+          const ca = coin.mint;
+          if (!ca || seen.has(ca)) continue;
+          let athMcap = firstNumber(coin.ath_market_cap);
+          const curMcap = firstNumber(coin.usd_market_cap, coin.market_cap_usd) || 0;
+          if (athMcap != null && athMcap > 50_000_000_000) {
+            athMcap = curMcap >= 4_000_000 ? curMcap : 4_000_000;
+          }
+          const athTimestamp = normalizeTimestamp(coin.ath_market_cap_timestamp);
+          if (athMcap == null || athMcap < minAthMcap || athTimestamp == null) continue;
+          seen.add(ca);
+          out.push({
+            ca,
+            name: coin.name || 'Unknown',
+            symbol: coin.symbol || '?',
+            chain: 'solana',
+            athMcap,
+            athTimestamp,
+            currentMcap: curMcap,
+            volume24hUsd: firstNumber(coin.volume_24h, coin.volume_24h_usd) || 0,
+            source: 'pumpfun',
+          });
+        }
+      } catch (_) {
+        break;
+      }
+    }
+    return out;
+  });
+}
+
 function itemsFromFetcherResult(result) {
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.tokens)) return result.tokens;

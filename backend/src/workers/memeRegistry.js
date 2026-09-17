@@ -47,6 +47,9 @@ function loadRegistry() {
       const canonKey = canonicalizeCa(m.ca, m.chain);
       if (SYSTEM_MINTS.has(canonKey)) continue;
       m.ca = canonKey;
+      if (m.athMcap > 50_000_000_000) {
+        m.athMcap = m.currentMcap >= 4_000_000 ? m.currentMcap : 4_000_000;
+      }
       if (memCache.has(canonKey)) {
         const existing = memCache.get(canonKey);
         if (Array.isArray(m.sourceFlags)) {
@@ -124,7 +127,10 @@ export function upsertMeme(item) {
 
   // ATH Market Cap & Timestamp (T_ATH) Integrity
   if (item.athMcap != null) {
-    const newAth = toSafeNumber(item.athMcap, 0);
+    let newAth = toSafeNumber(item.athMcap, 0);
+    if (newAth > 50_000_000_000) {
+      newAth = existing.currentMcap >= 4_000_000 ? existing.currentMcap : 4_000_000;
+    }
     if (newAth > existing.athMcap) {
       existing.athMcap = newAth;
       if (item.athTimestamp != null) {

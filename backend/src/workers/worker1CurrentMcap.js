@@ -143,6 +143,49 @@ export async function fetchCurrentMcapGt2m() {
   });
 }
 
+/**
+ * Fetch current market-cap candidates from Pump.fun's API (current mcap >= $2M).
+ */
+export async function fetchPumpFunCurrentMcap({ maxOffset = 200, minMcap = CURRENT_MCAP_THRESHOLD } = {}) {
+  return executeWithThrottle('pumpfun', async () => {
+    const out = [];
+    const seen = new Set();
+    for (let offset = 0; offset <= maxOffset; offset += 50) {
+      try {
+        const res = await fetch(`https://frontend-api-v3.pump.fun/coins?offset=${offset}&limit=50&sort=market_cap&order=DESC&includeNsfw=false`, {
+          signal: AbortSignal.timeout(8_000),
+          headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+        });
+        if (!res.ok) break;
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) break;
+        for (const coin of data) {
+          const ca = coin.mint;
+          if (!ca || seen.has(ca)) continue;
+          const currentMcap = firstNumber(coin.usd_market_cap, coin.market_cap_usd);
+          if (currentMcap == null || currentMcap < minMcap) continue;
+          seen.add(ca);
+          out.push({
+            ca,
+            name: coin.name || 'Unknown',
+            symbol: coin.symbol || '?',
+            chain: 'solana',
+            currentMcap,
+            volume24hUsd: firstNumber(coin.volume_24h, coin.volume_24h_usd) || 0,
+            source: 'pumpfun',
+          });
+        }
+        const last = data[data.length - 1];
+        const lastMcap = Number(last?.usd_market_cap || last?.market_cap_usd || 0);
+        if (lastMcap < minMcap && offset >= 150) break;
+      } catch (_) {
+        break;
+      }
+    }
+    return out;
+  });
+}
+
 function itemsFromFetcherResult(result) {
   if (Array.isArray(result)) return result;
   if (Array.isArray(result?.tokens)) return result.tokens;

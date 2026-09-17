@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { NavLink } from 'react-router-dom';
 import { RefreshCw, Search } from 'lucide-react';
 import { getBackendUrl, authHeaders } from '../utils/sniperApi';
 
@@ -115,12 +116,32 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
       {/* Page Header */}
       <div className="page-header page-header-row meme-page-header">
         <div>
-          <span className="page-eyebrow">Distributed Meme Workers · Registry</span>
+          <span className="page-eyebrow">🎯 Active Focus Workspace · Distributed Meme Workers</span>
           <h2>Tracked Memes Registry</h2>
           <p>
-            All-memes backfill tracking across workers. Worker 1 captures Current Mcap &gt; $2M,
-            Worker 2 ATH Mcap &gt; $4M, and Worker 3 processes unbackfilled entries.
+            Memes discovered and tracked for wallet backfilling across Solana &amp; Robinhood: Worker 1 captures Current Mcap &gt; $2M,
+            Worker 2 ATH Mcap &gt; $4M, and Worker 3 harvests early buyer wallets.
           </p>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            background: 'rgba(99, 102, 241, 0.08)',
+            border: '1px solid rgba(99, 102, 241, 0.25)',
+            padding: '4px 12px',
+            borderRadius: '20px',
+            fontSize: '0.78rem',
+            color: '#818cf8',
+            marginTop: '0.5rem',
+          }}>
+            <span>🎯 Focus Mode: <strong>Finding Tracked Memes</strong></span>
+            <span style={{ color: '#64748b' }}>·</span>
+            <span>Solana &amp; EVM page scanners paused</span>
+            <span style={{ color: '#64748b' }}>·</span>
+            <NavLink to="/smart-wallets" style={{ color: '#a5b4fc', textDecoration: 'underline' }}>
+              Switch to Tracked Wallets →
+            </NavLink>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
           <button

@@ -1,5 +1,6 @@
 import { runWorker1Pass } from './worker1CurrentMcap.js';
 import { runWorker2Pass } from './worker2AthMcap.js';
+import { runHistoricalSolanaHarvest } from './historicalDiscovery.js';
 import { processNextUnbackfilledMeme, processUnbackfilledMemesBatch } from './worker3EarlyBuyers.js';
 import { processWalletMetricsPass } from './worker4WalletMetrics.js';
 import { runWorker5Pass } from './worker5TokenDistribution.js';
@@ -19,6 +20,9 @@ export function startAllWorkers({ autoRun = true } = {}) {
     timers.push(setInterval(() => runWorker1Pass().catch(() => {}), 10 * 60_000));
     timers.push(setInterval(() => runWorker2Pass().catch(() => {}), 15 * 60_000));
 
+    // Deep 6-month historical Solana runner harvest (every 2 hours)
+    timers.push(setInterval(() => runHistoricalSolanaHarvest().catch(() => {}), 2 * 3600_000));
+
     // Worker 3 & 4: Queue processing (every 3min and 5min)
     timers.push(setInterval(() => processUnbackfilledMemesBatch(3).catch(() => {}), 3 * 60_000));
     timers.push(setInterval(() => processWalletMetricsPass().catch(() => {}), 5 * 60_000));
@@ -26,9 +30,10 @@ export function startAllWorkers({ autoRun = true } = {}) {
     // Worker 5: Hit-rate classifier (every 10min)
     timers.push(setInterval(() => runWorker5Pass().catch(() => {}), 10 * 60_000));
 
-    // Trigger immediate initial pass on Workers 1 & 2
+    // Trigger immediate initial pass on Workers 1 & 2 & Historical Discovery
     runWorker1Pass().catch(() => {});
     runWorker2Pass().catch(() => {});
+    runHistoricalSolanaHarvest().catch(() => {});
   }
 }
 
@@ -48,6 +53,7 @@ export function getWorkerStatus() {
       worker3: { name: 'Pre-ATH Early Buyers', interval: '3m' },
       worker4: { name: 'In-Memory Wallet Metrics', interval: '5m' },
       worker5: { name: 'Token ATH & Hit Rate', interval: '10m' },
+      historicalDiscovery: { name: 'Solana 6-Month Harvest (Pump.fun + Gecko)', interval: '2h' },
     },
   };
 }
