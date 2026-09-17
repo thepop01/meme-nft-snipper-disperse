@@ -25,11 +25,19 @@ function formatDaysAgo(ts) {
   return `${diffDays}d ago`;
 }
 
-export default function MemeRegistryView({ initialMemes = null } = {}) {
+function getMemeChain(meme) {
+  if (meme.chain) return String(meme.chain).toLowerCase();
+  const ca = meme.contractAddress || meme.ca || '';
+  if (ca.startsWith('0x') || ca.startsWith('0X')) return 'robinhood';
+  return 'solana';
+}
+
+export default function MemeRegistryView({ initialMemes = null, initialChain = 'all' } = {}) {
   const [memes, setMemes] = useState(initialMemes ? { memes: initialMemes } : null);
   const [loading, setLoading] = useState(!initialMemes);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | 'backfilled' | 'pending_worker3'
+  const [chainTab, setChainTab] = useState(initialChain); // 'all' | 'solana' | 'robinhood'
 
   const fetchMemes = async () => {
     setLoading(true);
@@ -55,8 +63,27 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
 
   const allMemes = useMemo(() => memes?.memes || [], [memes]);
 
+  const solanaCount = useMemo(() =>
+    allMemes.filter(m => getMemeChain(m) === 'solana').length,
+    [allMemes]
+  );
+  const robinhoodCount = useMemo(() =>
+    allMemes.filter(m => getMemeChain(m) === 'robinhood').length,
+    [allMemes]
+  );
+
+  const activePool = useMemo(() => {
+    if (chainTab === 'solana') {
+      return allMemes.filter(m => getMemeChain(m) === 'solana');
+    }
+    if (chainTab === 'robinhood') {
+      return allMemes.filter(m => getMemeChain(m) === 'robinhood');
+    }
+    return allMemes;
+  }, [allMemes, chainTab]);
+
   const filteredMemes = useMemo(() => {
-    let list = allMemes;
+    let list = activePool;
 
     // Status filter
     if (filterStatus === 'backfilled') {
@@ -72,15 +99,15 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
       m.symbol?.toLowerCase().includes(q) ||
       (m.contractAddress || m.ca)?.toLowerCase().includes(q)
     );
-  }, [allMemes, filterStatus, search]);
+  }, [activePool, filterStatus, search]);
 
   const backfilledCount = useMemo(() =>
-    allMemes.filter(m => m.backfilled === true).length,
-    [allMemes]
+    activePool.filter(m => m.backfilled === true).length,
+    [activePool]
   );
   const pendingCount = useMemo(() =>
-    allMemes.filter(m => m.backfilled !== true).length,
-    [allMemes]
+    activePool.filter(m => m.backfilled !== true).length,
+    [activePool]
   );
 
   return (
@@ -107,6 +134,38 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
         </div>
       </div>
 
+      {/* Dedicated Chain Tabs */}
+      <div className="strategy-tab-bar" style={{ marginBottom: '1rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className={`strategy-tab ${chainTab === 'all' ? 'active' : ''}`}
+          onClick={() => setChainTab('all')}
+        >
+          <span>All Chains</span>
+          <span className="strategy-tab-badge">{allMemes.length}</span>
+        </button>
+        <button
+          type="button"
+          className={`strategy-tab ${chainTab === 'solana' ? 'active' : ''}`}
+          onClick={() => setChainTab('solana')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#9333ea' }} />
+          <span>Solana</span>
+          <span className="strategy-tab-badge">{solanaCount}</span>
+        </button>
+        <button
+          type="button"
+          className={`strategy-tab ${chainTab === 'robinhood' ? 'active' : ''}`}
+          onClick={() => setChainTab('robinhood')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
+          <span>Robinhood / EVM</span>
+          <span className="strategy-tab-badge">{robinhoodCount}</span>
+        </button>
+      </div>
+
       {/* KPI Strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.8rem', marginBottom: '1.25rem' }}>
         <div
@@ -115,10 +174,10 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
           onClick={() => setFilterStatus('all')}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem' }}>
-            <span>All Memes</span>
+            <span>All Memes{chainTab === 'solana' ? ' (Solana)' : chainTab === 'robinhood' ? ' (Robinhood)' : ''}</span>
           </div>
           <div style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#111827' }}>
-            {allMemes.length}
+            {activePool.length}
           </div>
         </div>
 
@@ -160,7 +219,7 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
           className={`btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-outline'}`}
           onClick={() => setFilterStatus('all')}
         >
-          All ({allMemes.length})
+          All ({activePool.length})
         </button>
         <button
           type="button"
@@ -189,7 +248,7 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
         </div>
 
         <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
-          Showing {filteredMemes.length} of {allMemes.length}
+          Showing {filteredMemes.length} of {activePool.length}
         </span>
       </div>
 
@@ -220,12 +279,27 @@ export default function MemeRegistryView({ initialMemes = null } = {}) {
                 {filteredMemes.map(m => {
                   const address = m.contractAddress || m.ca || '';
                   const volume = m.volume24h ?? m.volume24hUsd ?? null;
+                  const chain = getMemeChain(m);
                   return (
-                    <tr key={`${m.chain}:${address || m.symbol}`}>
+                    <tr key={`${chain}:${address || m.symbol}`}>
                       <td>
-                        <strong style={{ color: '#111827', fontSize: '0.9rem' }}>
-                          {m.symbol || 'N/A'}
-                        </strong>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <strong style={{ color: '#111827', fontSize: '0.9rem' }}>
+                            {m.symbol || 'N/A'}
+                          </strong>
+                          <span
+                            style={{
+                              fontSize: '0.65rem',
+                              padding: '1px 5px',
+                              borderRadius: '3px',
+                              fontWeight: 600,
+                              background: chain === 'solana' ? '#f3e8ff' : '#ecfdf5',
+                              color: chain === 'solana' ? '#7c3aed' : '#047857',
+                            }}
+                          >
+                            {chain === 'solana' ? 'SOL' : 'EVM'}
+                          </span>
+                        </div>
                       </td>
                       <td>
                         <span

@@ -259,4 +259,109 @@ describe('MemeRegistryView', () => {
     expect(html).toMatch(/PEPE/);
     expect(html).toMatch(/DOGE/);
   });
+
+  it('renders chain tabs: All Chains, Solana, and Robinhood / EVM', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'PEPE',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+      {
+        chain: 'robinhood',
+        contractAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        symbol: 'EVMPEPE',
+        currentMcap: 1200000,
+        athMcap: 4200000,
+        volume24h: 300000,
+        sourceFlags: ['geckoterminal'],
+        backfilled: false,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/All Chains/);
+    expect(html).toMatch(/Solana/);
+    expect(html).toMatch(/Robinhood \/ EVM/);
+    expect(html).toMatch(/SOL/);
+    expect(html).toMatch(/EVM/);
+  });
+
+  it('supports initialChain="solana" to filter strictly for Solana memes', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'SOLTOKEN',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+      {
+        chain: 'robinhood',
+        contractAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        symbol: 'ROBINTOKEN',
+        currentMcap: 1200000,
+        athMcap: 4200000,
+        volume24h: 300000,
+        sourceFlags: ['geckoterminal'],
+        backfilled: false,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} initialChain="solana" />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/SOLTOKEN/);
+    expect(html).not.toMatch(/ROBINTOKEN/);
+  });
+
+  it('supports initialChain="robinhood" to filter strictly for Robinhood memes', () => {
+    const mockMemes = [
+      {
+        chain: 'solana',
+        contractAddress: '7vfCn7zqe6AvxGadilUe62yLBWXtSTgtsWZkqBT8xua',
+        symbol: 'SOLTOKEN',
+        currentMcap: 2500000,
+        athMcap: 5500000,
+        volume24h: 850000,
+        sourceFlags: ['gmgn'],
+        backfilled: true,
+      },
+      {
+        chain: 'robinhood',
+        contractAddress: '0x1234567890abcdef1234567890abcdef12345678',
+        symbol: 'ROBINTOKEN',
+        currentMcap: 1200000,
+        athMcap: 4200000,
+        volume24h: 300000,
+        sourceFlags: ['geckoterminal'],
+        backfilled: false,
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} initialChain="robinhood" />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/ROBINTOKEN/);
+    expect(html).not.toMatch(/SOLTOKEN/);
+  });
 });
