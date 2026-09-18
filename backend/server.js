@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws';
 import { config } from './src/config.js';
 import { getWalletAddress } from './src/wallet.js';
 import { onEvent, log, getLogs } from './src/bus.js';
-import { startPumpFeed } from './src/discovery/pumpfun.js';
+import { startPumpFeed, stopPumpFeed } from './src/discovery/pumpfun.js';
 import { createPool, migrate } from './src/tape/db.js';
 import { initSmartWalletsTable } from './src/smartwallets/db.js';
 import { initMemeTokensTable } from './src/discovery/db.js';
@@ -19,7 +19,7 @@ import { MonitorBudget } from './src/discovery/monitorBudget.js';
 import { IngestionStats } from './src/discovery/ingestionStats.js';
 import { StructuralEvidenceCollector } from './src/discovery/structuralEvidence.js';
 import { SolanaStructuralRpc, solanaResolvers } from './src/discovery/solanaStructuralRpc.js';
-import { startRaydiumFeed } from './src/discovery/raydium.js';
+import { startRaydiumFeed, stopRaydiumFeed } from './src/discovery/raydium.js';
 import { getTokens, getToken, setTokenDb } from './src/discovery/registry.js';
 import {
   getBots, createBot, updateBot, deleteBot, startBot, stopBot, getWatchlist, PRESETS,
@@ -42,10 +42,10 @@ import { startRefreshLoop } from './src/discovery/refreshLoop.js';
 import {
   getTracked, getTrackedByMint, manualTrack, untrack, promoteToTracked,
 } from './src/analysis/tracked.js';
-import { startEvmFeeds } from './src/discovery/evm.js';
-import { startGmgnFeeds } from './src/discovery/gmgn.js';
-import { startAttentionPoll } from './src/analysis/attention.js';
-import { startMoversFeed } from './src/discovery/movers.js';
+import { startEvmFeeds, stopEvmFeeds } from './src/discovery/evm.js';
+import { startGmgnFeeds, stopGmgnFeeds } from './src/discovery/gmgn.js';
+import { startAttentionPoll, stopAttentionPoll } from './src/analysis/attention.js';
+import { startMoversFeed, stopMoversFeed } from './src/discovery/movers.js';
 import { createWalletRouter } from './src/wallets/routes.js';
 import { createSmartWalletsRouter } from './src/smartwallets/routes.js';
 import { startSmartWalletFinder } from './src/smartwallets/finder.js';
@@ -93,13 +93,109 @@ app.use('/api/smart-wallets', createSmartWalletsRouter({ getTokens: () => getTok
 // --- Worker Manager & Meme Registry ---
 app.get('/api/workers/status', (req, res) => res.json(getWorkerStatus()));
 app.get('/api/memes/registry', (req, res) => {
-  const list = getTrackedMemes(req.query).map(m => ({
+  const chain = (req.query.chain && req.query.chain !== 'all') ? req.query.chain : null;
+  const status = req.query.status;
+  const search = (req.query.search || req.query.q || '').trim().toLowerCase();
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const isAll = req.query.limit === 'all' || req.query.pageSize === 'all';
+  const pageSize = isAll ? 100000 : Math.min(500, Math.max(1, Number(req.query.pageSize ?? req.query.limit) || 50));
+
+  const rawList = getTrackedMemes();
+  const solanaCount = rawList.filter(m => (m.chain || 'solana') === 'solana').length;
+  const robinhoodCount = rawList.filter(m => m.chain === 'robinhood').length;
+  const backfilledCount = rawList.filter(m => m.backfilled === true).length;
+  const pendingCount = rawList.filter(m => !m.backfilled).length;
+
+  let filtered = rawList;
+  if (chain) filtered = filtered.filter(m => (m.chain || 'solana') === chain);
+  if (status === 'backfilled') filtered = filtered.filter(m => m.backfilled === true);
+  if (status === 'pending_worker3') filtered = filtered.filter(m => !m.backfilled);
+  if (search) {
+    filtered = filtered.filter(m =>
+      (m.symbol || '').toLowerCase().includes(search) ||
+      (m.name || '').toLowerCase().includes(search) ||
+      (m.ca || '').toLowerCase().includes(search)
+    );
+  }
+
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const start = (page - 1) * pageSize;
+  const sliced = isAll ? filtered : filtered.slice(start, start + pageSize);
+  const memes = sliced.map(m => ({
     ...m,
     contractAddress: m.ca,
     volume24h: m.volume24hUsd,
   }));
-  res.json({ memes: list });
+
+  res.json({
+    total,
+    page,
+    pageSize,
+    totalPages,
+    solanaCount,
+    robinhoodCount,
+    backfilledCount,
+    pendingCount,
+    memes,
+  });
 });
+
+// --- Meme Page Scanner Control (Solana & EVM Discovery) ---
+let serverTape = null;
+let memeScannersActive = process.env.ENABLE_MEME_SCANNERS === 'true';
+
+export function stopMemeScanners() {
+  try { stopPumpFeed(); } catch {}
+  try { stopRaydiumFeed(); } catch {}
+  try { stopEvmFeeds(); } catch {}
+  try { stopGmgnFeeds(); } catch {}
+  try { stopMoversFeed(); } catch {}
+  try { stopAttentionPoll(); } catch {}
+  memeScannersActive = false;
+  log('info', '[scanners] Solana Meme & EVM Meme page scanners STOPPED — active focus on Tracked Wallets & Tracked Memes');
+  return { active: false, status: 'paused', focus: ['tracked-wallets', 'tracked-memes'] };
+}
+
+export function startMemeScanners(tape = serverTape) {
+  if (memeScannersActive) return { active: true, status: 'active' };
+  try {
+    const structuralRpc = new SolanaStructuralRpc({ rpcUrl: config.rpcUrl, clock: ingestionClock, maxRequestsPerMinute: config.structuralEvidence.maxRequestsPerMinute });
+    const structuralEvidence = new StructuralEvidenceCollector({
+      tape, rpc: structuralRpc, resolvers: solanaResolvers,
+      fundingSourceFor: structuralRpc.fundingSourceFor.bind(structuralRpc),
+      walletAge: structuralRpc.walletAge.bind(structuralRpc),
+      richProfile: async () => null, cfg: config.structuralEvidence, clock: ingestionClock,
+      concurrency: config.structuralEvidence.concurrency,
+    });
+    startPumpFeed(tape, {
+      baseline: baselineController, budget: monitorBudget, stats: ingestionStats, structuralEvidence, clock: ingestionClock,
+    });
+  } catch (error) {
+    log('error', `[tape] PumpPortal start failed: ${error.message}`);
+  }
+  startRaydiumFeed();
+  startEvmFeeds();
+  startGmgnFeeds();
+  startAttentionPoll();
+  startMoversFeed();
+  memeScannersActive = true;
+  log('info', '[scanners] Solana Meme & EVM Meme page scanners STARTED');
+  return { active: true, status: 'active' };
+}
+
+app.get('/api/scanners/status', (req, res) => {
+  res.json({
+    active: memeScannersActive,
+    status: memeScannersActive ? 'active' : 'paused',
+    focus: ['tracked-wallets', 'tracked-memes'],
+    message: memeScannersActive
+      ? 'Solana & EVM meme page discovery scanners are running'
+      : 'Meme page discovery scanners paused — focus on Tracked Wallets & Tracked Memes',
+  });
+});
+app.post('/api/scanners/pause', (req, res) => res.json(stopMemeScanners()));
+app.post('/api/scanners/resume', (req, res) => res.json(startMemeScanners(serverTape)));
 
 // --- Alerts ---
 app.get('/api/alerts', (req, res) => res.json({ alerts: listAlerts() }));
@@ -373,32 +469,18 @@ server.listen(config.port, config.host, async () => {
     log('warn', `[tape] Postgres event tape unavailable (${error.message}); using fallback tape`);
     tape = { append: async () => true };
   }
-  try {
-    const structuralRpc = new SolanaStructuralRpc({ rpcUrl: config.rpcUrl, clock: ingestionClock, maxRequestsPerMinute: config.structuralEvidence.maxRequestsPerMinute });
-    const structuralEvidence = new StructuralEvidenceCollector({
-      tape, rpc: structuralRpc, resolvers: solanaResolvers,
-      fundingSourceFor: structuralRpc.fundingSourceFor.bind(structuralRpc),
-      walletAge: structuralRpc.walletAge.bind(structuralRpc),
-      richProfile: async () => null, cfg: config.structuralEvidence, clock: ingestionClock,
-      concurrency: config.structuralEvidence.concurrency,
-    });
-    startPumpFeed(tape, {
-      baseline: baselineController, budget: monitorBudget, stats: ingestionStats, structuralEvidence, clock: ingestionClock,
-    });
-  } catch (error) {
-    log('error', `[tape] PumpPortal start failed: ${error.message}`);
+  serverTape = tape;
+  if (memeScannersActive) {
+    startMemeScanners(tape);
+  } else {
+    log('info', '[scanners] Solana Meme & EVM Meme page scanners are PAUSED — active focus on Tracked Wallets & Tracked Memes');
   }
-  startRaydiumFeed();
-  startEvmFeeds(); // Robinhood discovery (EVM terminal is Robinhood-only)
-  startGmgnFeeds(); // GMGN trending + trenches for solana + robinhood (official CLI path)
   startPolling();
   startLimitOrderLoop();
   restoreNftJobs();
   refreshNftDrops().catch(() => {});
   setInterval(() => refreshNftDrops().catch(() => {}), 5 * 60 * 1000);
   startRefreshLoop();
-  startAttentionPoll(); // Phase 4: DexScreener boosts + socials attention signals
-  startMoversFeed(); // Movers & Revivals: catch aged tokens waking up (e.g. Udin)
   startSmartWalletFinder({ db: dbPool }); // Phase 5: Automatic smart wallet discovery for Solana + Robinhood
   startAllWorkers({ autoRun: true }); // Task 7: Start distributed 5-worker pipeline
 });
