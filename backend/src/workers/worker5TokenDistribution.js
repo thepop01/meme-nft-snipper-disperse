@@ -1,5 +1,6 @@
 import { load, save } from '../store.js';
-import { loadWallets, saveWallets } from '../smartwallets/tracker.js';
+import { loadWallets } from '../smartwallets/tracker.js';
+import { persistWallets } from '../smartwallets/persist.js';
 import { log } from '../bus.js';
 
 const STORE_KEY = 'token_ath_cache';
@@ -162,8 +163,7 @@ export async function runWorker5Pass(tokenAthFetcher) {
 
   // Persist updated wallets if any changed
   if (walletsUpdated > 0) {
-    doc.wallets = wallets;
-    saveWallets(doc);
+    await persistWallets(null, wallets);
   }
 
   return {

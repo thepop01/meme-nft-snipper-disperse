@@ -1,4 +1,5 @@
-import { loadWallets, saveWallets } from '../smartwallets/tracker.js';
+import { loadWallets } from '../smartwallets/tracker.js';
+import { persistWallets } from '../smartwallets/persist.js';
 import { log } from '../bus.js';
 
 /**
@@ -299,7 +300,9 @@ export async function processWalletMetricsPass(customActivityFetcher, tokenAthMa
     }
 
     // Persist only metrics (never raw trades)
-    saveWallets({ ...doc, wallets });
+    if (processed > 0) {
+      await persistWallets(null, wallets);
+    }
   } catch (err) {
     log('warn', `[worker4] metrics pass failed: ${err?.message || String(err)}`);
   }
