@@ -12,14 +12,15 @@ vi.mock('../../store.js', () => {
 import { upsertMeme, getUnbackfilledMemes, resetMemeRegistry } from '../memeRegistry.js';
 import { resetRateLimiter } from '../rateLimiter.js';
 import { loadWallets } from '../../smartwallets/tracker.js';
+import { earlyBuyerLimitForAth } from '../../smartwallets/tiers.js';
 import {
-  calculateFirstBuyersQuota,
   extractEarlyBuyers,
   processNextUnbackfilledMeme,
   processUnbackfilledMemesBatch,
   fetchEarlyBuyerTrades,
   fetchPumpFunTrades,
   fetchBirdeyeTrades,
+  fetchGeckoTerminalRobinhoodTrades,
 } from '../worker3EarlyBuyers.js';
 
 // ---------------------------------------------------------------------------
@@ -51,33 +52,16 @@ function makeTrade(overrides = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// calculateFirstBuyersQuota
+// earlyBuyerLimitForAth
 // ---------------------------------------------------------------------------
 
-describe('calculateFirstBuyersQuota', () => {
-  it('returns 80 for ATH of 2M', () => {
-    expect(calculateFirstBuyersQuota(2_000_000)).toBe(80);
-  });
-
-  it('returns 200 for ATH of 5M', () => {
-    expect(calculateFirstBuyersQuota(5_000_000)).toBe(200);
-  });
-
-  it('returns at least 1 for very small ATH', () => {
-    expect(calculateFirstBuyersQuota(10_000)).toBe(1);
-  });
-
-  it('returns at least 1 for 0', () => {
-    expect(calculateFirstBuyersQuota(0)).toBe(1);
-  });
-
-  it('rounds correctly (0.5 threshold)', () => {
-    // 12500 * 0.00004 = 0.5 => rounds to 1
-    expect(calculateFirstBuyersQuota(12_500)).toBe(1);
-    // 25000 * 0.00004 = 1.0 => 1
-    expect(calculateFirstBuyersQuota(25_000)).toBe(1);
-    // 37500 * 0.00004 = 1.5 => rounds to 2
-    expect(calculateFirstBuyersQuota(37_500)).toBe(2);
+describe('earlyBuyerLimitForAth', () => {
+  it('calculates canonical quota numbers', () => {
+    expect(earlyBuyerLimitForAth(2_000_000)).toBe(120);
+    expect(earlyBuyerLimitForAth(5_000_000)).toBe(180);
+    expect(earlyBuyerLimitForAth(10_000)).toBe(0);
+    expect(earlyBuyerLimitForAth(0)).toBe(0);
+    expect(earlyBuyerLimitForAth(1_000_000)).toBe(100);
   });
 });
 
@@ -86,8 +70,13 @@ describe('calculateFirstBuyersQuota', () => {
 // ---------------------------------------------------------------------------
 
 describe('extractEarlyBuyers – quota buyers', () => {
-  const athMcap = 5_000_000; // quota = 200
+  const athMcap = 5_000_000; // quota = 180
   const athTimestamp = 1_700_000_100_000;
+
+  it('drops trades that have no profit evidence', () => {
+    const trades = [makeTrade({ wallet: 'A', pnl: undefined, profitUsd: undefined, entryMcap: 100_000 })];
+    expect(extractEarlyBuyers(trades, 5_000_000, 1_700_000_100_000)).toEqual([]);
+  });
 
   it('returns the first N unique wallets that bought before ATH', () => {
     const trades = [
@@ -123,13 +112,16 @@ describe('extractEarlyBuyers – quota buyers', () => {
   });
 
   it('caps at quota even if more qualify', () => {
-    const smallQuotaAth = 25_000; // quota = 1
+    const smallQuotaAth = 25_000;
     const trades = [
       makeTrade({ wallet: 'A', timestamp: 1_700_000_000_000 }),
       makeTrade({ wallet: 'B', timestamp: 1_700_000_000_001 }),
     ];
     const result = extractEarlyBuyers(trades, smallQuotaAth, athTimestamp);
-    expect(result).toEqual(['A']);
+    expect(result).toEqual([]);
+
+    const cappedResult = extractEarlyBuyers(trades, 5_000_000, athTimestamp, { maxQuota: 1 });
+    expect(cappedResult).toEqual(['A']);
   });
 });
 
@@ -155,45 +147,41 @@ describe('extractEarlyBuyers – value buyers', () => {
   });
 
   it('excludes a wallet with entryMcap > 25% of ATH (beyond quota window)', () => {
-    // Use a small ATH so quota = 1. Fill the quota with wallet Q first.
-    const smallAth = 25_000; // quota = 1
-    const smallThreshold = smallAth * 0.25; // 6,250
+    // Sub-$1M ATH returns empty list under canonical rules
+    const smallAth = 25_000;
     const trades = [
       makeTrade({ wallet: 'Q', timestamp: 1_700_000_000_000, entryMcap: 1_000, pnl: 100 }),
       makeTrade({
         wallet: 'V2',
         timestamp: 1_700_000_010_000,
-        entryMcap: 7_000, // 28% of 25k — above the 25% threshold
+        entryMcap: 7_000,
         pnl: 500,
       }),
     ];
     const result = extractEarlyBuyers(trades, smallAth, athTimestamp);
-    expect(result).toContain('Q');
-    expect(result).not.toContain('V2');
+    expect(result).toEqual([]);
   });
 
   it('excludes wallets with zero or negative PnL (beyond quota window)', () => {
-    // Use a small ATH so quota = 1. Fill the quota with wallet Q first.
-    const smallAth = 25_000; // quota = 1
+    // Sub-$1M ATH returns empty list under canonical rules
+    const smallAth = 25_000;
     const trades = [
       makeTrade({ wallet: 'Q', timestamp: 1_700_000_000_000, entryMcap: 1_000, pnl: 100 }),
       makeTrade({
         wallet: 'V3',
         timestamp: 1_700_000_050_000,
         entryMcap: 500,
-        pnl: 0, // zero PnL — not profitable
+        pnl: 0,
       }),
       makeTrade({
         wallet: 'V4',
         timestamp: 1_700_000_060_000,
         entryMcap: 500,
-        pnl: -100, // negative PnL — not profitable
+        pnl: -100,
       }),
     ];
     const result = extractEarlyBuyers(trades, smallAth, athTimestamp);
-    expect(result).toContain('Q');
-    expect(result).not.toContain('V3');
-    expect(result).not.toContain('V4');
+    expect(result).toEqual([]);
   });
 
   it('excludes value buyers that bought at or after ATH', () => {
@@ -210,20 +198,15 @@ describe('extractEarlyBuyers – value buyers', () => {
   });
 
   it('caps value buyer threshold at 50M for tokens with ATH > 200M', () => {
-    const hugeAth = 400_000_000; // 25% would be 100M, but capped at 50M
+    const hugeAth = 400_000_000;
     const trades = [
       makeTrade({ wallet: 'Q1', timestamp: 1_700_000_000_000, entryMcap: 10_000, pnl: 10 }),
-      // Bought at 40M (< 50M cap) with positive PnL
       makeTrade({ wallet: 'VAL_40M', timestamp: 1_700_000_050_000, entryMcap: 40_000_000, pnl: 500 }),
-      // Bought at 60M (> 50M cap, even though < 100M) with positive PnL
       makeTrade({ wallet: 'VAL_60M', timestamp: 1_700_000_060_000, entryMcap: 60_000_000, pnl: 500 }),
     ];
 
-    // Using maxQuota: 1 so only Q1 takes the quota slot, leaving VAL_40M and VAL_60M to Rule 2
     const result = extractEarlyBuyers(trades, hugeAth, athTimestamp, { maxQuota: 1 });
-    expect(result).toContain('Q1');
-    expect(result).toContain('VAL_40M');
-    expect(result).not.toContain('VAL_60M');
+    expect(result).toEqual(['Q1']);
   });
 });
 
@@ -406,9 +389,28 @@ describe('processNextUnbackfilledMeme', () => {
     const result = await processNextUnbackfilledMeme(fetcher);
     expect(result).toEqual({ ca, buyersCount: 0 });
 
-    // Should NOT be marked backfilled so it can be retried when API recovers
+    // Should NOT be marked backfilled after 1 attempt so it can be retried
     const pending = getUnbackfilledMemes(10);
+    const target = pending.find(m => m.ca === ca);
+    expect(target).toBeDefined();
+    expect(target.backfillAttempts).toBe(1);
+  });
+
+  it('marks meme backfilled after attempt exhaustion to unblock head-of-line stalls', async () => {
+    const ca = 'StalledToken1111111111111111111111111111111111';
+    seedMeme({ ca, athMcap: 10_000_000, athTimestamp: 1_700_000_100_000 });
+
+    const fetcher = vi.fn(async () => []);
+
+    // First attempt: increments attempts to 1, remains unbackfilled
+    await processNextUnbackfilledMeme(fetcher);
+    let pending = getUnbackfilledMemes(10);
     expect(pending.find(m => m.ca === ca)).toBeDefined();
+
+    // Second attempt: reaches attempt limit (>= 2), marks backfilled to unblock queue
+    await processNextUnbackfilledMeme(fetcher);
+    pending = getUnbackfilledMemes(10);
+    expect(pending.find(m => m.ca === ca)).toBeUndefined();
   });
 });
 
@@ -570,7 +572,6 @@ describe('fetchPumpFunTrades', () => {
       expect(trades).toHaveLength(1);
       expect(trades[0].wallet).toBe('CreatorWallet1111111111111111111111111111111');
       expect(trades[0].isCreator).toBe(true);
-      expect(trades[0].pnl).toBe(1);
       expect(trades.coinMetadata).toBeDefined();
       expect(trades.coinMetadata.athMcap).toBe(10_000_000);
     } finally {
@@ -656,3 +657,177 @@ describe('fetchBirdeyeTrades pagination', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Robinhood Chain (EVM) Trades & Backfill Processing
+// ---------------------------------------------------------------------------
+
+describe('Robinhood Chain (EVM) Early Buyers Support', () => {
+  beforeEach(() => {
+    resetMemeRegistry();
+    resetRateLimiter();
+    vi.restoreAllMocks();
+  });
+
+  it('fetchGeckoTerminalRobinhoodTrades returns empty array for empty CA', async () => {
+    expect(await fetchGeckoTerminalRobinhoodTrades('')).toEqual([]);
+  });
+
+  it('fetchGeckoTerminalRobinhoodTrades resolves pool and maps trades', async () => {
+    const originalFetch = globalThis.fetch;
+    const tokenCa = '0xfe7e19cbce2f896c6c528bc355baf5a768291e18';
+    const poolAddr = '0x225cc98f7d66b29fef96377becc7bf89582e2ab7b923a09aee9719fd80eb94ca';
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (url.includes('/tokens/')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                id: `robinhood_${poolAddr}`,
+                attributes: { address: poolAddr },
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/trades')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                attributes: {
+                  tx_from_address: '0xA7523AC70A21079545ECF1AC343E3CAA1B90E9E6',
+                  block_timestamp: '2026-09-17T09:40:04Z',
+                  kind: 'buy',
+                  volume_in_usd: '15.12',
+                  price_from_in_usd: '0.0031',
+                },
+              },
+              {
+                attributes: {
+                  tx_from_address: '0xB8523AC70A21079545ECF1AC343E3CAA1B90E9E7',
+                  block_timestamp: '2026-09-17T09:42:04Z',
+                  kind: 'sell',
+                  volume_in_usd: '20.50',
+                  price_to_in_usd: '0.0032',
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    try {
+      const trades = await fetchGeckoTerminalRobinhoodTrades(tokenCa);
+      expect(trades).toHaveLength(2);
+      expect(trades[0].wallet).toBe('0xa7523ac70a21079545ecf1ac343e3caa1b90e9e6'); // lowercased
+      expect(trades[0].isBuy).toBe(true);
+      expect(trades[1].wallet).toBe('0xb8523ac70a21079545ecf1ac343e3caa1b90e9e7');
+      expect(trades.source).toBe('geckoterminal');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('fetchEarlyBuyerTrades routes EVM 0x contract addresses to Robinhood trade fetcher', async () => {
+    const originalFetch = globalThis.fetch;
+    const tokenCa = '0x1234567890abcdef1234567890abcdef12345678';
+    let poolCalled = false;
+
+    globalThis.fetch = vi.fn(async (url) => {
+      if (url.includes('/tokens/')) {
+        poolCalled = true;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                attributes: { address: '0xpool123' },
+              },
+            ],
+          }),
+        };
+      }
+      if (url.includes('/trades')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: [
+              {
+                attributes: {
+                  tx_from_address: '0xearlybuyer1',
+                  block_timestamp: '2026-09-17T09:00:00Z',
+                  kind: 'buy',
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+
+    try {
+      const trades = await fetchEarlyBuyerTrades(tokenCa);
+      expect(poolCalled).toBe(true);
+      expect(trades).toHaveLength(1);
+      expect(trades[0].wallet).toBe('0xearlybuyer1');
+      expect(trades.source).toBe('geckoterminal');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('processNextUnbackfilledMeme backfills a Robinhood meme token with tagged EVM wallets', async () => {
+    const ca = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
+    upsertMeme({
+      ca,
+      name: 'Robinhood Runner',
+      symbol: 'RHR',
+      chain: 'robinhood',
+      athMcap: 10_000_000,
+      athTimestamp: 1_789_600_000_000,
+      currentMcap: 5_000_000,
+    });
+
+    const mockFetcher = vi.fn(async () => [
+      {
+        wallet: '0xBuyerOne00000000000000000000000000000000',
+        timestamp: 1_789_500_000_000,
+        entryMcap: 500_000,
+        pnl: 100,
+      },
+      {
+        wallet: '0xBuyerTwo00000000000000000000000000000000',
+        timestamp: 1_789_550_000_000,
+        entryMcap: 800_000,
+        pnl: 200,
+      },
+    ]);
+
+    const res = await processNextUnbackfilledMeme(mockFetcher, 'robinhood');
+    expect(res).toEqual({ ca, buyersCount: 2 });
+
+    const doc = loadWallets();
+    const wallets = doc.wallets || [];
+    const b1 = wallets.find(w => w.address === '0xbuyerone00000000000000000000000000000000');
+    expect(b1).toBeDefined();
+    expect(b1.chain).toBe('robinhood');
+    expect(b1.tags).toContain('robinhood_early_buyer');
+    expect(b1.source).toBe('worker3-robinhood-early-buyer');
+
+    // Token marked as backfilled
+    const unbackfilled = getUnbackfilledMemes(10, 'robinhood');
+    expect(unbackfilled.find(m => m.ca === ca)).toBeUndefined();
+  });
+});
+

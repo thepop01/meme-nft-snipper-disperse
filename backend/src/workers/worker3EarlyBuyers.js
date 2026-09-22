@@ -1,6 +1,6 @@
 import '../config.js';
 import { getUnbackfilledMemes, markMemeBackfilled, recordBackfillAttempt, SYSTEM_MINTS } from './memeRegistry.js';
-import { loadWallets, saveWallets, upsertWallets } from '../smartwallets/tracker.js';
+import { selectEarlyBuyersDual } from '../smartwallets/tracker.js';
 import { persistWallets } from '../smartwallets/persist.js';
 import { runGmgnCli } from '../smartwallets/sniperHarvester.js';
 import { executeWithThrottle } from './rateLimiter.js';
@@ -60,7 +60,6 @@ export async function fetchBirdeyeTrades(ca, options = {}) {
             wallet: it.owner,
             timestamp,
             entryMcap: tokenPriceUsd ? (tokenPriceUsd * 1_000_000_000) : null,
-            pnl: 1,
           });
         }
       }
@@ -108,7 +107,6 @@ export async function fetchPumpFunTrades(ca) {
         wallet: coin.creator,
         timestamp: coin.created_timestamp ? Number(coin.created_timestamp) : (coin.ath_market_cap_timestamp ? Number(coin.ath_market_cap_timestamp) - 3_600_000 : Date.now()),
         entryMcap: coin.market_cap_usd ? Math.min(Number(coin.market_cap_usd), 10_000) : 5_000,
-        pnl: 1,
         isCreator: true,
       },
     ];
@@ -150,7 +148,6 @@ export async function fetchHeliusTrades(ca) {
         wallet: tx.feePayer,
         timestamp: tx.timestamp ? tx.timestamp * 1000 : 0,
         entryMcap: null,
-        pnl: 1,
       }))
       .filter(t => t.wallet);
   });
@@ -250,7 +247,6 @@ export async function fetchGeckoTerminalRobinhoodTrades(ca, options = {}) {
       wallet: wallet.toLowerCase(),
       timestamp: ts,
       entryMcap: priceUsd && Number.isFinite(priceUsd) ? priceUsd * 1_000_000_000 : null,
-      pnl: isBuy ? 1 : 0.5,
       isBuy,
       volumeUsd: volUsd,
     });
@@ -408,18 +404,6 @@ export async function fetchEarlyBuyerTrades(ca, options = {}) {
 }
 
 /**
- * Calculate the quota of first-buyer wallets for a given ATH market cap.
- * N = round(athMcap * 0.00004), minimum 1.
- *
- * @param {number} athMcap
- * @returns {number}
- */
-export function calculateFirstBuyersQuota(athMcap) {
-  const n = Math.round((Number(athMcap) || 0) * 0.00004);
-  return Math.max(1, n);
-}
-
-/**
  * Resolve the entry market cap from a trade object, checking multiple field names.
  */
 function entryMcap(trade) {
@@ -450,20 +434,10 @@ function tradeTimestamp(trade) {
 /**
  * Extract qualifying early buyer wallet addresses from a list of trades.
  *
- * Qualification rules (both applied to the same set of pre-ATH trades):
- *
- * Rule 1 – Quota Buyers: first N unique wallets to buy, where
- *   N = calculateFirstBuyersQuota(athMcap). Must buy strictly before T_ATH.
- *
- * Rule 2 – Value Buyers: wallet bought at entry market cap <= 25% of ATH
- *   with positive realized PnL. Must buy strictly before T_ATH.
- *
- * The result is the union of both rule sets, deduplicated.
- *
  * @param {Array} trades        – Array of trade objects
  * @param {number} athMcap      – All-time-high market cap
  * @param {number} athTimestamp  – Timestamp of ATH (strict cutoff)
- * @param {Object} [options]    – Reserved for future use
+ * @param {Object} [options]    – Optional options including maxQuota
  * @returns {string[]}          – Array of qualifying wallet addresses
  */
 export function extractEarlyBuyers(trades, athMcap, athTimestamp, options) {
@@ -471,45 +445,31 @@ export function extractEarlyBuyers(trades, athMcap, athTimestamp, options) {
   if (!Number.isFinite(athMcap) || athMcap <= 0) return [];
   if (!Number.isFinite(athTimestamp) || athTimestamp <= 0) return [];
 
-  const quota = (options && Number.isFinite(options.maxQuota))
-    ? options.maxQuota
-    : calculateFirstBuyersQuota(athMcap);
-  // Rule 2: Value threshold is 25% of ATH, capped at $50,000,000 mcap
-  const valueThreshold = Math.min(athMcap * 0.25, 50_000_000);
   const normAthTimestamp = (athTimestamp > 0 && athTimestamp < 100_000_000_000)
     ? athTimestamp * 1000
     : athTimestamp;
 
-  // --- Rule 1: Quota Buyers ---
-  // Sort by timestamp ascending, take first N unique wallets with timestamp < athTimestamp.
   const preAthTrades = trades
     .filter(t => tradeTimestamp(t) < normAthTimestamp)
     .sort((a, b) => tradeTimestamp(a) - tradeTimestamp(b));
 
-  const quotaBuyers = new Set();
-  for (const trade of preAthTrades) {
-    const addr = trade.wallet || trade.address || trade.maker;
-    if (!addr) continue;
-    if (quotaBuyers.size >= quota) break;
-    quotaBuyers.add(String(addr));
-  }
-
-  // --- Rule 2: Value Buyers ---
-  // Entry mcap <= min(25% of ATH, $50M) and positive PnL, strictly before T_ATH.
-  const valueBuyers = new Set();
-  for (const trade of preAthTrades) {
-    const addr = trade.wallet || trade.address || trade.maker;
-    if (!addr) continue;
-
-    const em = entryMcap(trade);
+  const buys = preAthTrades.map(trade => {
     const pnl = tradePnl(trade);
-    if (em != null && em <= valueThreshold && pnl != null && pnl > 0) {
-      valueBuyers.add(String(addr));
-    }
-  }
-
-  // Union of both rule sets (already deduplicated within each set)
-  return [...new Set([...quotaBuyers, ...valueBuyers])];
+    return {
+      wallet: trade.wallet || trade.address || trade.maker,
+      buyMcap: entryMcap(trade),
+      ts: tradeTimestamp(trade),
+      ...(pnl == null ? {} : { profitUsd: pnl }),
+    };
+  });
+  const dual = selectEarlyBuyersDual({
+    buys,
+    athMcap,
+    requireProfitable: true,
+  });
+  const capped = options?.maxQuota;
+  const buyers = dual.allBuyers || [];
+  return buyers.slice(0, Number.isFinite(capped) ? capped : buyers.length).map(b => b.address);
 }
 
 /**
@@ -530,7 +490,6 @@ export async function processMemeToken(meme, customTradeFetcher = fetchEarlyBuye
     const wallets = extractEarlyBuyers(trades, athMcap, athTimestamp);
 
     const source = trades.source || 'custom';
-    const isGenesisSource = source === 'birdeye' || source === 'pumpfun' || source === 'geckoterminal' || source === 'gmgn' || source === 'helius' || source === 'custom';
 
     if (wallets.length > 0) {
       // Build wallet records for upsert
@@ -558,9 +517,9 @@ export async function processMemeToken(meme, customTradeFetcher = fetchEarlyBuye
 
       markMemeBackfilled(ca);
       log('info', `[worker3] backfilled ${ca} — ${wallets.length} early buyer(s) harvested (source: ${source}, chain: ${chain})`);
-    } else if (isGenesisSource && trades.length > 0) {
+    } else if (trades.length > 0) {
       markMemeBackfilled(ca);
-      log('info', `[worker3] backfilled ${ca} — 0 early buyers qualified from ${source} genesis trades`);
+      log('info', `[worker3] backfilled ${ca} — 0 early buyers qualified from ${source} trades`);
     } else {
       const attempts = (Number(meme.backfillAttempts) || 0) + 1;
       recordBackfillAttempt(ca);
@@ -598,7 +557,7 @@ export async function processNextUnbackfilledMeme(customTradeFetcher = fetchEarl
 }
 
 /**
- * Process a batch of unbackfilled meme tokens in parallel to distribute the workload.
+ * Process a batch of unbackfilled meme tokens sequentially so the provider throttle stays one meme at a time.
  *
  * @param {number} [batchSize=3]
  * @param {Function} [customTradeFetcher]
