@@ -1,6 +1,10 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { transformWithOxc } from 'vite';
 import react from '@vitejs/plugin-react';
+
+const root = fileURLToPath(new URL('.', import.meta.url));
 
 // The UI contract suite (SmartWalletsView.test.js) is intentionally a .test.js
 // file (the vitest include only matches *.test.js) but contains JSX. Vite's
@@ -27,6 +31,11 @@ const jsxInJsTests = {
 
 export default defineConfig({
   plugins: [jsxInJsTests, react()],
+  resolve: {
+    alias: {
+      '@wallet-query': path.resolve(root, '../backend/src/smartwallets/query.js'),
+    },
+  },
   test: {
     environment: 'node',
     include: ['src/**/__tests__/**/*.test.js'],
