@@ -1,7 +1,7 @@
 const DEFAULT_CONFIGS = {
   dexscreener: { baseDelayMs: 1000, maxDelayMs: 10000 },
-  geckoterminal: { baseDelayMs: 1500, maxDelayMs: 15000 },
-  gmgn: { baseDelayMs: 1500, maxDelayMs: 20000 },
+  geckoterminal: { baseDelayMs: 2500, maxDelayMs: 15000 },
+  gmgn: { baseDelayMs: 3500, maxDelayMs: 30000 },
   birdeye: { baseDelayMs: 1500, maxDelayMs: 8000 },
   pumpfun: { baseDelayMs: 1000, maxDelayMs: 10000 },
   helius: { baseDelayMs: 250, maxDelayMs: 5000 },
@@ -53,8 +53,17 @@ function isRateLimitError(err) {
     }
   }
 
-  const msg = String(err.message || err || '');
-  if (msg.includes('429') || msg.includes('403')) {
+  const msg = String(err.message || err || '').toLowerCase();
+  if (
+    msg.includes('429') ||
+    msg.includes('403') ||
+    msg.includes('usage limit exceeded') ||
+    msg.includes('limit exceeded') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('banned') ||
+    msg.includes('rate_limit')
+  ) {
     return true;
   }
 
@@ -96,15 +105,17 @@ export async function executeWithThrottle(sourceName, asyncFn) {
       throw new Error(`Endpoint ${sourceName} is cooling down until ${new Date(s.coolingUntil).toISOString()}`);
     }
 
-    s.lastCallTs = Date.now();
-
-    const res = await asyncFn();
-    s.successCount++;
-    s.consecutiveErrors = 0;
-    s.status = 'healthy';
-    s.coolingUntil = 0;
-    s.currentDelayMs = Math.max(s.baseDelayMs, s.currentDelayMs - 100);
-    return res;
+    try {
+      const res = await asyncFn();
+      s.successCount++;
+      s.consecutiveErrors = 0;
+      s.status = 'healthy';
+      s.coolingUntil = 0;
+      s.currentDelayMs = Math.max(s.baseDelayMs, s.currentDelayMs - 100);
+      return res;
+    } finally {
+      s.lastCallTs = Date.now();
+    }
   } catch (err) {
     if (s.coolingUntil <= Date.now()) {
       s.failureCount++;

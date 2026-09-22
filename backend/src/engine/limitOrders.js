@@ -13,6 +13,7 @@ import { executeBuy } from '../trading/executor.js';
 import { openPosition, closePosition, getPositions } from './positions.js';
 import { fetchPricesBatch, fetchPriceUsd } from '../discovery/enrich.js';
 import { config } from '../config.js';
+import { assertTokenBuyable } from '../analysis/safety.js';
 
 const STORE = 'limit-orders';
 const TICK_MS = 5000;
@@ -78,7 +79,9 @@ export async function createLimitOrder(params) {
     if (!isFinite(solAmount) || solAmount <= 0) throw new Error('solAmount must be a positive number');
 
     const token = getToken(mint);
-    const currentPriceUsd = token?.priceUsd ?? await fetchPriceUsd(mint);
+    if (!token) throw new Error('Token is no longer available in the registry');
+    assertTokenBuyable(token);
+    const currentPriceUsd = token.priceUsd ?? await fetchPriceUsd(mint);
     if (currentPriceUsd == null) {
       throw new Error('No current price for this token — cannot place a limit order yet');
     }
@@ -99,6 +102,7 @@ export async function createLimitOrder(params) {
       onCurve: token?.onCurve ?? false,
       decimals: token?.decimals ?? 6,
       priceAtCreationUsd: currentPriceUsd,
+      walletAddress: params.walletAddress || null,
     };
   } else {
     const { positionId } = params;
@@ -121,6 +125,7 @@ export async function createLimitOrder(params) {
       symbol: position.symbol ?? null,
       name: position.name ?? null,
       priceAtCreationUsd: currentPriceUsd,
+      walletAddress: params.walletAddress || position.walletAddress || null,
     };
   }
 
@@ -251,6 +256,10 @@ export async function runLimitTick({
 }
 
 async function fillOrder(order, price, { execBuy, openPos, closePos }) {
+  // Once a buy executor returns, the chain action is confirmed even if
+  // position bookkeeping fails. Keep that fact local to this fill so the catch
+  // path cannot reopen the order and broadcast a duplicate buy.
+  let buyExecutionSucceeded = false;
   try {
     order.status = 'triggered';
     order.triggeredAt ||= Date.now();
@@ -267,9 +276,15 @@ async function fillOrder(order, price, { execBuy, openPos, closePos }) {
         onCurve: order.onCurve, decimals: order.decimals,
       };
       const buyResult = await execBuy({ ...token, priceUsd: price }, {
-        solAmount: order.solAmount, slippagePct: order.slippagePct,
+        solAmount: order.solAmount,
+        slippagePct: order.slippagePct,
+        // Keep retries tied to this order/trigger, never to a fresh random
+        // submission. Unknown outcomes remain parked for reconciliation.
+        idempotencyKey: `limit-order:${order.id}`,
       });
+      buyExecutionSucceeded = true;
       buyResult.solSpent = order.solAmount;
+      if (order.walletAddress) buyResult.walletAddress = order.walletAddress;
       const position = await openPos({ ...token, priceUsd: price }, buyResult, order.exitRules, null);
       closeOrder(order, 'filled', {
         filledAt: Date.now(), filledPriceUsd: buyResult.priceUsd, positionId: position.id,
@@ -297,7 +312,25 @@ async function fillOrder(order, price, { execBuy, openPos, closePos }) {
     order.attempts += 1;
     order.error = err.message;
     log('warn', `Limit ${order.side} attempt ${order.attempts} failed for ${order.mint.slice(0, 8)}: ${err.message}`);
-    if (order.attempts >= MAX_ATTEMPTS) {
+    // An executor timeout/transport error is not a confirmed pre-submit
+    // rejection. Keep the persisted submitted state for manual reconciliation
+    // rather than allowing the next price tick to broadcast a second trade.
+    if (err?.submissionOutcome === 'unknown' || buyExecutionSucceeded) {
+      // Keep this terminal state out of the normal "closed" retention path's
+      // retry loop; restart handling also parks submitted/interrupted orders.
+      const reason = buyExecutionSucceeded
+        ? `Buy submitted successfully but position bookkeeping failed: ${err.message}`
+        : `${err.message} — verify the transaction before retrying`;
+      closeOrder(order, 'interrupted', {
+        interruptedAt: Date.now(),
+        error: reason,
+      });
+      pushAlert({
+        type: 'meme', severity: 'critical',
+        title: `Limit ${order.side} ${buyExecutionSucceeded ? 'BOOKKEEPING FAILURE' : 'UNKNOWN OUTCOME'}: ${order.symbol || order.mint.slice(0, 6)}`,
+        body: buyExecutionSucceeded ? reason : `${err.message} — manual reconciliation required`,
+      });
+    } else if (order.attempts >= MAX_ATTEMPTS) {
       closeOrder(order, 'failed');
       pushAlert({
         type: 'meme', severity: 'critical',

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, subscribeWs } from './sniperApi';
 
-export function useTradingPortfolio({ tagIds = [] } = {}) {
+export function useTradingPortfolio({ tagIds = [], walletAddress = '' } = {}) {
   const [positions, setPositions] = useState([]);
   const [trades, setTrades] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -12,7 +12,9 @@ export function useTradingPortfolio({ tagIds = [] } = {}) {
   const tagKey = tagIds.join(',');
   const refresh = useCallback(async () => {
     try {
-      const params = tagKey ? { tagIds: tagKey } : {};
+      const params = {};
+      if (tagKey) params.tagIds = tagKey;
+      if (walletAddress) params.walletAddress = walletAddress;
       const [positionData, tradeData, orderData, fillData, pnlData] = await Promise.all([
         api.positions(params), api.trades(params), api.limitOrders(params), api.fills(params), api.pnl(params),
       ]);
@@ -26,7 +28,7 @@ export function useTradingPortfolio({ tagIds = [] } = {}) {
     } finally {
       setLoading(false);
     }
-  }, [tagKey]);
+  }, [tagKey, walletAddress]);
 
   useEffect(() => {
     refresh();

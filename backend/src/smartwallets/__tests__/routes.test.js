@@ -164,5 +164,31 @@ describe('smart-wallets routes', () => {
     expect(found).toBeDefined();
     expect(res.body.sniperCount).toBeGreaterThanOrEqual(1);
   });
+
+  it('filters by enhanced subfilters (early_buyer, top_runners, profitable, snipers_alpha)', async () => {
+    await request(app()).post('/api/smart-wallets').send({
+      wallets: [{
+        address: '0x2222222222222222222222222222222222222222',
+        chain: 'robinhood',
+        category: 'tracked',
+        qualificationMethod: 'pre_ath_early_buyer',
+        earlyBuyerInfo: { rank: 1, symbol: 'SOLRUNNER', athMcap: 15000000 },
+        realizedProfitUsd: 12000,
+        winRatePct: 80,
+      }],
+    });
+
+    const resEarly = await request(app()).get('/api/smart-wallets?subfilter=early_buyer&search=0x2222222222222222222222222222222222222222');
+    expect(resEarly.status).toBe(200);
+    expect(resEarly.body.wallets.some(w => w.address === '0x2222222222222222222222222222222222222222')).toBe(true);
+
+    const resRunners = await request(app()).get('/api/smart-wallets?subfilter=top_runners&search=0x2222222222222222222222222222222222222222');
+    expect(resRunners.status).toBe(200);
+    expect(resRunners.body.wallets.some(w => w.address === '0x2222222222222222222222222222222222222222')).toBe(true);
+
+    const resProfitable = await request(app()).get('/api/smart-wallets?subfilter=profitable&search=0x2222222222222222222222222222222222222222');
+    expect(resProfitable.status).toBe(200);
+    expect(resProfitable.body.wallets.some(w => w.address === '0x2222222222222222222222222222222222222222')).toBe(true);
+  });
 });
 

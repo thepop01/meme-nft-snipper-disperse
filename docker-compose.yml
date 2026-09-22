@@ -19,7 +19,7 @@ services:
       POSTGRES_PASSWORD: bot_password
       POSTGRES_DB: bot_tape
     ports:
-      - "5434:5432"
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:5434:5432"
     volumes:
       - bot_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,10 +32,15 @@ services:
     build: ./backend
     container_name: bot-backend
     ports:
-      - "4600:4517"
+      # Bind to loopback by default; set BACKEND_BIND_ADDRESS explicitly when
+      # exposing the service through a trusted reverse proxy/network boundary.
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:4600:4517"
     environment:
+      HOST: "0.0.0.0"
       PORT: "4517"
-      API_TOKEN: ${API_TOKEN:-}
+      NODE_ENV: "production"
+      API_TOKEN: ${API_TOKEN:?Set API_TOKEN to a long random bearer token}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3080}
       DATABASE_URL: postgres://bot_user:bot_password@postgres:5432/bot_tape
       RPC_URL: https://api.mainnet-beta.solana.com
       WSS_URL: wss://api.mainnet-beta.solana.com
@@ -60,7 +65,9 @@ services:
         VITE_BACKEND_URL: ""   # same-origin; nginx proxies /api and /ws to backend
     container_name: bot-frontend
     ports:
-      - "3080:80"
+      # Keep the dashboard local by default; override explicitly for a
+      # deliberate reverse-proxy or LAN deployment.
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:3080:80"
     depends_on:
       - backend
     restart: unless-stopped

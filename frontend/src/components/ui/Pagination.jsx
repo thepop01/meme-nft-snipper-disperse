@@ -57,24 +57,24 @@ export default function Pagination({
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '12px',
-        padding: '12px 16px',
-        background: 'var(--bg-elevated, #161b22)',
-        borderTop: '1px solid var(--border-color, #30363d)',
-        borderRadius: '0 0 var(--radius-md, 8px) var(--radius-md, 8px)',
-        fontSize: '0.85rem',
-        color: 'var(--text-dim, #8b949e)',
+        gap: '8px',
+        padding: '8px 12px',
+        background: 'var(--bg-elevated, #ffffff)',
+        borderTop: '1px solid var(--border-color, #e5e7eb)',
+        borderRadius: '0 0 var(--radius-md, 6px) var(--radius-md, 6px)',
+        fontSize: '0.75rem',
+        color: 'var(--text-dim, #6b7280)',
       }}
     >
       {/* Item range summary */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span>
           Showing{' '}
-          <strong style={{ color: 'var(--text-main, #f0f6fc)' }}>
+          <strong style={{ color: 'var(--text-main, #111827)' }}>
             {startItem.toLocaleString()}–{endItem.toLocaleString()}
           </strong>{' '}
           of{' '}
-          <strong style={{ color: 'var(--text-main, #f0f6fc)' }}>
+          <strong style={{ color: 'var(--text-main, #111827)' }}>
             {totalItems.toLocaleString()}
           </strong>{' '}
           items
@@ -82,19 +82,19 @@ export default function Pagination({
       </div>
 
       {/* Navigation Buttons & Page List */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
         <button
           type="button"
           onClick={() => onPageChange(page - 1)}
           disabled={page <= 1}
           style={{
-            padding: '4px 10px',
-            borderRadius: '6px',
-            border: '1px solid var(--border-color, #30363d)',
-            background: page <= 1 ? 'transparent' : 'var(--bg-color, #0d1117)',
-            color: page <= 1 ? 'var(--text-disabled, #484f58)' : 'var(--text-main, #f0f6fc)',
+            padding: '3px 8px',
+            borderRadius: '4px',
+            border: '1px solid var(--border-color, #e5e7eb)',
+            background: page <= 1 ? 'transparent' : 'var(--bg-color, #ffffff)',
+            color: page <= 1 ? 'var(--text-disabled, #9ca3af)' : 'var(--text-main, #111827)',
             cursor: page <= 1 ? 'not-allowed' : 'pointer',
-            fontSize: '0.82rem',
+            fontSize: '0.75rem',
             fontWeight: 500,
           }}
         >
@@ -104,7 +104,7 @@ export default function Pagination({
         {pages.map((p, idx) => {
           if (p === '...') {
             return (
-              <span key={`ellipsis-${idx}`} style={{ padding: '0 4px', color: 'var(--text-dim, #8b949e)' }}>
+              <span key={`ellipsis-${idx}`} style={{ padding: '0 3px', color: 'var(--text-dim, #9ca3af)' }}>
                 …
               </span>
             );
@@ -116,15 +116,15 @@ export default function Pagination({
               type="button"
               onClick={() => onPageChange(p)}
               style={{
-                minWidth: '28px',
-                height: '28px',
-                padding: '0 6px',
-                borderRadius: '6px',
-                border: isCurrent ? '1px solid var(--primary, #38bdf8)' : '1px solid var(--border-color, #30363d)',
-                background: isCurrent ? 'var(--primary-soft, rgba(56, 189, 248, 0.15))' : 'var(--bg-color, #0d1117)',
-                color: isCurrent ? 'var(--primary, #38bdf8)' : 'var(--text-main, #f0f6fc)',
+                minWidth: '24px',
+                height: '24px',
+                padding: '0 4px',
+                borderRadius: '4px',
+                border: isCurrent ? '1px solid var(--primary, #5046e5)' : '1px solid var(--border-color, #e5e7eb)',
+                background: isCurrent ? 'var(--primary-soft, rgba(80, 70, 229, 0.1))' : 'var(--bg-color, #ffffff)',
+                color: isCurrent ? 'var(--primary, #5046e5)' : 'var(--text-main, #111827)',
                 cursor: 'pointer',
-                fontSize: '0.82rem',
+                fontSize: '0.75rem',
                 fontWeight: isCurrent ? 700 : 500,
               }}
             >
@@ -138,13 +138,13 @@ export default function Pagination({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= totalPages}
           style={{
-            padding: '4px 10px',
-            borderRadius: '6px',
-            border: '1px solid var(--border-color, #30363d)',
-            background: page >= totalPages ? 'transparent' : 'var(--bg-color, #0d1117)',
-            color: page >= totalPages ? 'var(--text-disabled, #484f58)' : 'var(--text-main, #f0f6fc)',
+            padding: '3px 8px',
+            borderRadius: '4px',
+            border: '1px solid var(--border-color, #e5e7eb)',
+            background: page >= totalPages ? 'transparent' : 'var(--bg-color, #ffffff)',
+            color: page >= totalPages ? 'var(--text-disabled, #9ca3af)' : 'var(--text-main, #111827)',
             cursor: page >= totalPages ? 'not-allowed' : 'pointer',
-            fontSize: '0.82rem',
+            fontSize: '0.75rem',
             fontWeight: 500,
           }}
         >
@@ -154,18 +154,18 @@ export default function Pagination({
 
       {/* Page Size Selector (if onPageSizeChange provided) */}
       {onPageSizeChange && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
           <span>Show:</span>
           <select
             value={pageSize}
             onChange={e => onPageSizeChange(Number(e.target.value))}
             style={{
-              padding: '3px 8px',
-              borderRadius: '6px',
-              border: '1px solid var(--border-color, #30363d)',
-              background: 'var(--bg-color, #0d1117)',
-              color: 'var(--text-main, #f0f6fc)',
-              fontSize: '0.82rem',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              border: '1px solid var(--border-color, #e5e7eb)',
+              background: 'var(--bg-color, #ffffff)',
+              color: 'var(--text-main, #111827)',
+              fontSize: '0.75rem',
               cursor: 'pointer',
             }}
           >

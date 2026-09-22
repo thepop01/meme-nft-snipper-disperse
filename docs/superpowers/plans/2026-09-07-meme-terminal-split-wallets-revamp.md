@@ -333,7 +333,7 @@ git commit -m "test: cover smart wallets UI contract, keep terminal panels scope
 
 ## Self-review (run before handoff)
 
-1. Spec coverage: terminal split (Task 1: `/sol-meme`, `/evm-meme`, Robinhood-only EVM, locked chain selector), wallet sources (Task 2: pump.fun leaderboard, fomo.family via fomoapi.io, GMGN smart money, Cielo/Arkham/Birdeye marked research in `sources.js`), 30-day runner tiers (Tasks 2–3: 1M→0.5M, 5M→1M, ~10M→2M with exact-10M priority, 10–50M→5M, 50M+→10M), UI revamp + extra-panel removal (Task 4: right rail TradeTicket-only, kept SniperConfig/AlphaCalls/PortfolioDock/TradingTerminal), strategy context (Task 0 docs list).
+1. Spec coverage: terminal split (Task 1: `/sol-meme`, `/evm-meme`, Robinhood-only EVM, locked chain selector), wallet sources (Task 2: pump.fun leaderboard, fomo.family via fomoapi.io, GMGN smart money, Cielo/Birdeye marked research in `sources.js`), 30-day runner tiers (Tasks 2–3: 1M→0.5M, 5M→1M, ~10M→2M with exact-10M priority, 10–50M→5M, 50M+→10M), UI revamp + extra-panel removal (Task 4: right rail TradeTicket-only, kept SniperConfig/AlphaCalls/PortfolioDock/TradingTerminal), strategy context (Task 0 docs list).
 2. Placeholder scan: no unfinished markers or vague handling notes; every code step shows full file content; every command shows expected output; `supertest` and `renderToString` imports match `backend/package.json` and React 19.
 3. Type consistency: wallet shape `{ address, chain: 'solana'|'robinhood', source, score, hits, evidence }` identical in `finder.js`, `tracker.js:59`, `routes.js`, `SmartWalletsView.jsx`; tier shape `{ minAth, maxAth, maxBuyMcap, label }` identical in `tiers.js:13` and plan assertions; token identity stays `(chain, mint)` per `registry.js:tokenKey`.
 

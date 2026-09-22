@@ -1,437 +1,433 @@
-Memecoin Filtering: Full Context for a Sniper Pipeline (Solana + Robinhood Chain)
-
-0\. How the pros structure it
-
-Almost every serious alpha group / bot uses a two-layer system:
-
-
-
-Hard filters (kill switches) – binary pass/fail. If any fails, skip the token. Fast, on-chain, milliseconds.
-
-Soft scoring – weighted heuristics that produce a score (0–100). Score decides whether to buy, how much to size, and when to exit.
-
-Latency matters: hard filters must run in <1 slot (\~400ms on Solana). Anything requiring API calls to Twitter/DexScreener runs asynchronously and affects sizing rather than entry.
-
-
-
-There is no formal "industry standard," but there is a strong de facto consensus around the checks below. The free tools (RugCheck, GMGN, Bubblemaps, Photon/BullX/Axiom UI flags) essentially codify what alpha groups do manually.
-
-
-
-1\. Token / Contract-Level Filters (Solana SPL)
-
-Check	Why	Typical rule
-
-Mint authority revoked	Dev can print infinite supply	Must be null
-
-Freeze authority revoked	Dev can freeze your wallet from selling	Must be null
-
-Metadata mutable	Dev can swap name/image later (rug-and-rebrand)	Soft flag; immutable preferred
-
-Token program	SPL Token vs Token-2022	Token-2022 extensions are red flags unless zero
-
-↳ Transfer fee extension	Hidden sell tax	Fee must be 0%
-
-↳ Transfer hook	Arbitrary code on transfer = honeypot vector	Reject
-
-↳ Permanent delegate	Dev can move tokens from any wallet	Reject
-
-↳ Non-transferable / default-frozen	Obvious	Reject
-
-Supply / decimals sanity	Weird decimals break pricing bots	Standard: 6 or 9 decimals, \~1B supply (pump.fun standard)
-
-Update authority	Who controls metadata	Pump.fun tokens default to pump.fun authority = "normal"
-
-Pump.fun / LetsBonk / Moonshot tokens are created via factory programs, so mint/freeze are auto-revoked. The danger there is not contract-level, it's distribution-level (see §3).
-
-
-
-2\. Liquidity-Level Filters
-
-Launchpad vs. raw pool – Bonding-curve launches (pump.fun, letsbonk.fun, Moonshot, Boop) can't rug liquidity pre-migration. Raw Raydium/Meteora/Orca pools created directly by a dev can.
-
-LP burned or locked – For Raydium AMM v4 / CPMM pools: LP tokens should be sent to the burn address or a locker (Streamflow, etc.). PumpSwap (pump.fun's own AMM) auto-burns LP on migration.
-
-Initial liquidity size – Too low (<5 SOL) = trivially manipulable; suspiciously high from a fresh wallet = likely bundled.
-
-Liquidity-to-market-cap ratio – MC/liquidity > \~10–15× means price is fragile; you can't exit.
-
-Bonding curve progress % – Many snipers only enter at 0–5% (earliest) or at 85–100% (pre-migration, anticipating the migration pump). Mid-curve is often dead zone.
-
-Migration event – Pump.fun → PumpSwap/Raydium migration is itself a filter/trigger. "Migrated" tokens have survived a \~$60–70k MC bonding curve, which weeds out most instant rugs.
-
-Pool age / creation slot – Used to detect re-launched pools and to enforce "buy only within first N slots" or "wait N slots to let bundlers dump."
-
-3\. Holder Distribution Filters (most important on Solana)
-
-This is where 80% of rugs on pump.fun-style platforms get caught.
-
-
-
-Top 10 holders % (excluding LP/bonding curve) – Common threshold: <15–25%. Some groups use top 5 <10%.
-
-Dev wallet % – Deployer holding >5% is a flag; >10% usually reject. Also flag if dev holds 0% (already sold before you got there).
-
-Bundled buys (Jito bundles) – Multiple wallets buying in the same slot as token creation = dev bought his own supply with 5–30 wallets. Detect via: same slot, same funding source, sequential wallet creation, identical buy sizes. Bots display "Bundled: 34%". Threshold: reject if bundled supply >20–30% and not yet sold.
-
-Sniper count in first slots – How many bot wallets got in slot 0–2. High sniper concentration = they'll dump on you.
-
-Insider wallets – Wallets funded from the dev wallet or the same CEX withdrawal chain. Requires funding-tree analysis (walk SystemProgram.transfer history back 2–4 hops).
-
-Fresh wallet ratio – Wallets created <24h holding most supply = sybil/bundle. Aged wallets with real history = organic.
-
-Holder count and growth velocity – e.g., >100 holders in 5 min organic; but 500 holders all with 0.01% each in 30 sec = airdrop/sybil.
-
-Known wallet labels – Smart money (GMGN/Cielo tagged), KOLs, known ruggers, known bot farms.
-
-Holder overlap with previous rugs – If the same 20 wallets appear across the dev's last 5 tokens, it's a farm.
-
-Gini / HHI concentration – Some quant groups compute a concentration index instead of raw top-10.
-
-Bubblemaps cluster check – Visual/algorithmic cluster detection of linked wallets. Groups reject if one cluster controls >15–20%
-
-
-4. Deployer / Dev Wallet Filters
-
-Deployer history – Pull every token this wallet has created. Metrics: number of launches, % that rugged (LP pulled or dev dumped >50% within 1h), best ATH multiple, average lifespan. Rule of thumb: >3 prior launches all dead in <1h → reject. Serial deployer with 1–2 real runners → mild positive.
-
-Deployer funding source – Where did the SOL come from? Fresh CEX withdrawal (Binance/Coinbase/OKX hot wallet) is neutral-to-good. Funded from another deployer wallet, a mixer, or a known rugger cluster → reject.
-
-Deployer wallet age – Created <1h before launch and funded with exactly the launch cost → likely a disposable farm wallet.
-
-Deployer SOL balance – Nearly empty after launch = no skin in game.
-
-Dev buy on creation – On pump.fun, dev buys in the same tx as creation. 0–3% dev buy is normal; 10%+ is a dump risk; 0% dev buy on a "hyped" launch is sometimes a positive (community-first) but check for hidden bundles.
-
-Dev sold % – Real-time tracking of deployer sells. Many bots hard-exit the moment dev sells >50% of their bag.
-
-Linked wallets – Wallets that received SOL from the deployer within 24h of launch are treated as dev-controlled.
-
-Deployer reputation databases – Alpha groups maintain private blacklists (rugger addresses) and whitelists (devs known for legitimate runners). This is one of the biggest real edges.
-
-Rug-and-relaunch detection – Same name/ticker/image as a token that just died → almost always a relaunch farm. Compare metadata hashes and image URIs.
-
-5\. Trading / Volume Pattern Filters
-
-Buy/sell ratio in first N minutes – Organic launches lean heavily buy-side early; >40% sells in first 2 min = distribution happening.
-
-Unique buyers vs. total buys – 200 buys from 12 wallets = wash trading.
-
-Volume/MC ratio – Very high volume relative to market cap with flat price = wash or bot churn.
-
-Wash trading fingerprint – Repeated identical buy sizes, round numbers, same-slot buy+sell pairs, wallets that only ever interact with this token.
-
-Volume bot detection – Many devs pay for "volume bots" to trend on DexScreener. Signature: thousands of tiny alternating buys/sells from freshly funded wallets, each funded with \~0.05 SOL.
-
-Price impact per buy – Measure how much your intended size will move price. Common rule: skip if your buy moves price >3–5%.
-
-Slippage-required check – Simulate the swap; if honest slippage required is >15%, liquidity is fake or too thin.
-
-Sell simulation (honeypot test) – Simulate a sell transaction via RPC simulateTransaction before buying. If sell fails or returns near-zero → honeypot.
-
-Time-to-first-organic-buy – If nobody except bundlers bought in first 30s, the dev has no audience.
-
-Large sell walls / MEV pattern – Detect sandwich-bot presence (Jito tip spikes on this token); heavy MEV means your entries get front-run.
-
-Chart shape heuristics – Vertical wick up then instant retrace = bundle dump. Staircase up with rising holders = organic. Some groups actually run simple pattern classifiers on the first-5-minute candles.
-
-6\. Social / Narrative Filters (async, affects sizing not entry)
-
-Metadata completeness – Twitter, Telegram, website present. Missing all three = low-effort spam launch. All three present but created today = low value.
-
-Twitter/X account checks – Account age, follower count, follower quality (bot ratio), whether the handle was recently renamed (rename = recycled account). Twitter handle in metadata that doesn't exist → flag.
-
-Telegram group – Member count, member growth rate, ratio of messages to members, admin count, whether the group existed before the token.
-
-Website – Domain age (WHOIS), whether it's a pump.fun template, whether it links back to the correct contract.
-
-Narrative match – Is the token riding a live meta? (celebrity tweet, news event, AI agents, political, animal meta, etc.). Groups track "what's pumping right now" and only ape tokens matching the current 24–48h narrative.
-
-Origin of the meme – Real viral content (a tweet with 100k likes, a news clip) vs. fabricated. First-mover tokens on a real viral event outperform 10th copies dramatically.
-
-KOL involvement – Which influencers have bought (wallet tracking) or posted. Also negative: known paid-shill KOLs are a sell signal.
-
-Ticker collision – If 40 tokens with the same ticker launched in the last hour, you need to identify the "real" one (usually earliest with most organic volume) and avoid the copies.
-
-Name/image quality – Crude heuristics: AI-generated slop image, gibberish name, emoji-spam. LLM-based classifiers are increasingly used here.
-
-Sentiment scrapers – Twitter/Telegram mention velocity over 5/15/60 min windows.
-
-Dex/CT listing signals – DexScreener paid boost, "DEX paid" (dev paid $300 for DexScreener info update — mild commitment signal), CoinGecko/CMC fast-track.
-
-7\. Timing / Market Regime Filters
-
-SOL price action – Memecoin risk-on correlates with SOL trending up. Many groups cut sizing 50%+ when SOL is dumping.
-
-Time of day – US afternoon / evening (UTC 14:00–02:00) has the most liquidity and runners. Asian session runners exist but exit liquidity is worse.
-
-Launch rate – When pump.fun spawns 30k+ tokens/day, per-token attention is diluted; filters should tighten.
-
-Graduation rate – % of pump.fun tokens migrating in the last hour. Low graduation rate = dead market, tighten filters.
-
-Current meta saturation – 5th token on a narrative gets a fraction of the first one's flows.
-
-Network congestion – High priority fees / failed tx rates make sniping unreliable; some bots pause.
-
-8\. Robinhood Chain Specifics
-
-Robinhood Chain is an Arbitrum Orbit L2 (EVM), currently in testnet/early rollout, primarily built for tokenized stocks — not a memecoin venue yet. Context you need:
-
-
-
-Realistic situation:
-
-
-
-Very few if any meme launches. Liquidity will initially be Robinhood-controlled tokenized RWAs, not permissionless memes.
-
-If/when memes appear, they'll use standard EVM tooling (Uniswap-style pools) so filters are the EVM playbook, not the Solana one.
-
-EVM filter checklist (applies to Robinhood Chain, Base, Arbitrum, etc.):
-
-
-
-Check	Detail
-
-Contract verified	Unverified source on the chain explorer = reject
-
-Ownership	owner() renounced (0x000…dead), or check what owner-only functions exist
-
-Proxy / upgradeable	Upgradeable proxy = dev can change logic post-launch → reject
-
-Mint function	Any callable mint() → reject
-
-Blacklist / whitelist functions	Can block your wallet from selling
-
-Max tx / max wallet	Legit anti-bot, but check they can't be set to 0
-
-Trading enabled toggle	enableTrading() / setTradingOpen() – dev can disable sells
-
-Tax functions	Buy/sell tax; check max settable value (some contracts let dev set 99% sell tax)
-
-Hidden transfer logic	Bytecode analysis for \_transfer overrides, hidden approve drains
-
-Honeypot simulation	eth\_call a swap in → swap out; standard tools: honeypot.is, GoPlus, Token Sniffer
-
-LP lock	LP tokens burned or locked (Unicrypt, Team Finance, or native locker)
-
-Deployer nonce / history	Same as Solana: deployer's previous contracts and their fate
-
-Bytecode similarity	Hash the bytecode; compare to known rug templates and known-good templates
-
-Same-block sniping / MEV	On Orbit chains the sequencer is centralized, so no Jito-style bundles; first-come-first-served, latency to sequencer matters
-
-Standard EVM data sources: GoPlus Security API, Token Sniffer, De.Fi Scanner, Honeypot.is, DexScreener, Bubblemaps (supports EVM chains), Arkham labels.
-
-
-
-Practical advice: build the EVM filter module now against Base or Arbitrum (which have real memecoin flow) so it's battle-tested by the time Robinhood Chain opens up.
-
-
-
-9\. How It Fits Together: A Representative Scoring Model
-
-text
-
-Copy
-
-HARD FILTERS (any fail = skip):
-
-&#x20; mint\_authority == null
-
-&#x20; freeze\_authority == null
-
-&#x20; no Token-2022 dangerous extensions
-
-&#x20; sell\_simulation succeeds
-
-&#x20; bundled\_supply\_unsold < 30%
-
-&#x20; top10\_holders < 30%
-
-&#x20; dev\_holdings < 15%
-
-&#x20; deployer not on blacklist
-
-&#x20; not a relaunch of a dead token (name+image hash)
-
-
-
-SOFT SCORE (0–100):
-
-&#x20; Distribution (35 pts)
-
-&#x20;   top10 < 15%          +10
-
-&#x20;   dev < 3%             +8
-
-&#x20;   bundled < 10%        +8
-
-&#x20;   fresh\_wallet\_ratio < 30%    +5
-
-&#x20;   smart\_money\_present  +4
-
-
-
-&#x20; Deployer (20 pts)
-
-&#x20;   no prior rugs        +10
-
-&#x20;   has prior runner     +6
-
-&#x20;   CEX-funded, aged     +4
-
-
-
-&#x20; Liquidity/Trading (20 pts)
-
-&#x20;   buy/sell ratio > 70% first 2min   +8
-
-&#x20;   unique buyers > 50 first 5min     +7
-
-&#x20;   price impact of my size < 3%      +5
-
-
-
-&#x20; Social/Narrative (25 pts, async)
-
-&#x20;   matches live meta               +10
-
-&#x20;   real Twitter (aged, non-renamed) +6
-
-&#x20;   KOL wallet bought               +5
-
-&#x20;   active TG w/ organic growth     +4
-
-
-
-SIZING:
-
-&#x20; score < 50  → skip
-
-&#x20; 50–65       → 0.25× base size
-
-&#x20; 65–80       → 1× base size
-
-&#x20; 80+         → 2× base size
-
-Exit rules are usually filter-driven too: auto-sell on dev sell >50%, bundle wallets dumping, top-holder concentration rising, or liquidity dropping >X%.
-
-
-
-10\. Where Most Setups Fall Short \& What Can Be Improved
-
-Funding-tree analysis is shallow. Most bots look at 1 hop. Ruggers fund through 3–5 hops or via CEX round-trips. Build a proper wallet-graph with labeled clusters; this is the single biggest edge.
-
-
-
-Bundled-supply tracking is static. Everyone checks "bundled %" at launch. Few track bundle unwind in real time — i.e., have the bundle wallets started selling? Entering right after bundlers dump (the "post-bundle dip") is a well-known but under-automated play.
-
-
-
-Deployer reputation is treated as binary. Better: a Bayesian prior on the deployer's expected outcome distribution based on their launch history, updated per-launch.
-
-
-
-Nobody de-duplicates narrative copies well. Build a ticker/name/image similarity index (perceptual hash on image, fuzzy match on name/ticker) and rank copies by launch time + organic volume. Being able to auto-identify "the real one" among 40 clones within the first minute is a real edge; most manual traders do this by eye and lose 30–60 seconds.
-
-
-
-Sell simulation is done once. Honeypots and rug mechanics can be armed after your buy (e.g., dev flips a Token-2022 fee, or on EVM toggles a blacklist). Re-simulate a sell every N seconds while holding and auto-exit on failure.
-
-
-
-Social signals are consumed too slowly. Most bots poll Twitter every 30–60s. Streaming the X firehose (or filtered rules API) for the contract address / ticker gives you the first KOL mention seconds earlier. Same for Telegram: join the top 50 alpha groups with a listener bot and detect when a CA gets posted — this is essentially front-running the call groups.
-
-
-
-Filters don't adapt to market regime. Thresholds are hardcoded. Better: dynamically tighten distribution/holder thresholds when graduation rate is low and loosen when the market is running. Track your own hit rate per regime and let it tune thresholds.
-
-
-
-Sniper-vs-sniper dynamics are ignored. On popular launches you're competing with 50 other bots in slot 0. Detecting sniper density (how many known bot wallets bought in the first 2 slots) tells you whether you're early or you're the exit liquidity. Some groups deliberately avoid tokens with high sniper density and instead target tokens with low bot presence but rising organic buyers.
-
-
-
-No survival-based backtesting. Most people evaluate filters by "did it rug." Better metric: for each filter, what's the expected multiple distribution of tokens that passed vs. failed? Some filters reduce rugs but also filter out most runners (e.g., strict top-10 <10% eliminates many real runners because early organic buyers naturally hold more). Measure filter value by PnL impact, not rug-rate.
-
-
-
-Wallet labeling is outsourced. Relying only on GMGN/Cielo labels means everyone has the same information. Build your own "smart money" set: wallets with >60% win rate on 5+ memecoin trades, tracked over 30 days, and weight their buys accordingly. Also build your own "dumb money" set — wallets that consistently buy tops — as a contrarian signal.
-
-
-
-Image/name classification is crude. An LLM/vision pass on the token image and name ("is this a real recognizable meme or slop?", "does this match a current news event?") takes \~1–2s and can be run async. It's cheap now and correlates surprisingly well with runners.
-
-
-
-Exit filters are underdeveloped relative to entry filters. Most PnL is lost on exits, not entries. Apply the same filter stack continuously post-entry: holder concentration trending up, buy/sell ratio flipping, dev/insider wallets moving, LP changes, sniper wallets exiting. Each should be a weighted sell trigger, not a single hard stop.
-
-
-
-11\. Data Sources \& Tooling (Solana)
-
-Real-time on-chain:
-
-
-
-Helius / Triton / QuickNode RPC with Geyser/Yellowstone gRPC streams for slot-level detection of pump.fun create instructions, Raydium/PumpSwap pool creation, and token transfers.
-
-Jito for bundle submission and detecting bundled buys (same-slot multi-wallet analysis).
-
-Direct program account subscriptions to pump.fun bonding curve accounts for progress %.
-
-Token security:
-
-
-
-RugCheck API (mint/freeze/LP/top holders in one call)
-
-GoPlus Security (Solana + EVM)
-
-Your own on-chain reads (faster and more reliable than any third party)
-
-Holder / wallet intelligence:
-
-
-
-Bubblemaps (cluster detection)
-
-GMGN, Cielo, Arkham (wallet labels, smart money)
-
-Helius DAS / Enhanced Transactions API for wallet history
-
-Your own funding-graph database (Postgres/Neo4j)
-
-Market data:
-
-
-
-DexScreener, Birdeye, Jupiter price APIs
-
-Pump.fun's own frontend API (undocumented but widely used) for King of the Hill, trending
-
-Social:
-
-
-
-X API v2 filtered stream (or scraping)
-
-Telethon/Pyrogram listener bots in alpha groups
-
-Custom scrapers for TikTok/Reddit trending (for narrative detection, slower)
-
-Execution / reference bots:
-
-
-
-Photon, BullX, Axiom, GMGN, Trojan, Maestro — study their filter UIs; they expose exactly the flags alpha groups use (bundled %, sniper %, dev %, insiders %, top-10 %, DEX paid, etc.)
-
-12\. Reality Check
-
-Pump.fun produces 20,000–40,000 tokens/day. Over 98% never graduate. Of those that graduate, most die within 24h. Filters get you from a \~1% base rate to maybe 5–15% "real runner" rate. That's the realistic ceiling for pure filtering; the rest is sizing, exits, and speed.
-
-Every filter here is known to the ruggers too. They pass mint/freeze/LP checks trivially, spread bundles across aged wallets, buy fake Twitter followers, and pay for DEX boosts. The edge comes from the layers that are hard to fake: funding graph depth, deployer behavioral history, real-time bundle unwind, and organic buyer quality.
-
-Robinhood Chain: build for EVM generically, test on Base/Arbitrum, and just have the chain config ready. Don't expect meme flow there until permissionless deployment and a real DEX exist.
-
+# Memecoin Filtering: Full Context for a Sniper Pipeline (Solana + Robinhood Chain)
+
+---
+
+## 0. Architecture Overview: How the Pros Structure It
+
+Almost every serious alpha group and automated sniping bot deploys a disciplined **two-layer decision engine**:
+
+### 0.1 Hard Filters (Kill Switches)
+- **Nature:** Binary pass/fail. If any single check fails, the token is instantly discarded.
+- **Execution:** Synchronous, executed on-chain within $< 1$ slot ($\sim 400\text{ms}$ on Solana).
+- **Goal:** Reject rugs, honeypots, invalid programs, and dangerous mint authorities before spending execution cycles.
+
+### 0.2 Soft Scoring (Heuristic Engine)
+- **Nature:** Multi-factor weighted scoring producing a normalized rating ($0 - 100$).
+- **Impact:** Determines **whether to buy**, **position sizing** ($0.25\times$ to $2\times$ base SOL), and **exit urgency**.
+- **Execution:** Can incorporate asynchronous off-chain data (Twitter, DexScreener, Telegram, LLM vision) without stalling entry execution.
+
+### 0.3 De Facto Industry Consensus
+Free and commercial tools (RugCheck, GMGN, Bubblemaps, Photon, BullX) reflect standard alpha group operations. The filters detailed below constitute the industry-standard screening pipeline.
+
+---
+
+## 1. Token & Contract-Level Filters (Solana SPL)
+
+### 1.1 SPL Token Contract Security Checklist
+
+| Check | Rationale / Threat | Standard / Kill Switch Rule |
+| :--- | :--- | :--- |
+| **Mint Authority Revoked** | Deployer can inflate supply to infinity | **Must be `null`** (Hard Fail) |
+| **Freeze Authority Revoked** | Deployer can freeze trader accounts from selling | **Must be `null`** (Hard Fail) |
+| **Metadata Mutability** | Deployer can swap name, ticker, or image (rebrand rug) | Soft flag; **immutable** preferred |
+| **Token Program Type** | Standard SPL vs. Token-2022 | Token-2022 extensions are red flags unless zero |
+| ↳ **Transfer Fee Extension** | Hidden tax on buys/sells | **Fee must be 0%** (Hard Fail if $>0\%$) |
+| ↳ **Transfer Hook** | Arbitrary smart contract execution on transfer (honeypot) | **Immediate Rejection** |
+| ↳ **Permanent Delegate** | Deployer can transfer tokens out of any holder wallet | **Immediate Rejection** |
+| ↳ **Non-Transferable / Frozen** | Tokens cannot be moved or sold | **Immediate Rejection** |
+| **Supply & Decimals Sanity** | Non-standard decimals break pricing & routing bots | Standard: **6 or 9 decimals**, $\sim 1\text{B}$ supply |
+| **Update Authority** | Who controls token metadata | Default pump.fun authority is standard / accepted |
+
+> [!NOTE]
+> Tokens launched via factory launchpads (pump.fun, letsbonk.fun, Moonshot, Boop) automatically revoke mint and freeze authorities upon contract creation. The risk on launchpads is not contract-level; it is **supply distribution and bundler activity** (see Section 3).
+
+---
+
+## 2. Liquidity-Level Filters
+
+- **Launchpad vs. Raw AMM Pool:**
+  - *Bonding Curve Launches:* Pre-migration bonding curves (pump.fun, Moonshot) cannot pull initial liquidity.
+  - *Raw AMM Pools:* Direct Raydium (AMM v4 / CPMM), Meteora, or Orca pools require immediate verification of LP lock/burn.
+- **LP Burned or Locked:**
+  - Raydium pool LP tokens must be transferred to the dead/burn address or verified locked in a trusted locker (Streamflow, etc.). PumpSwap auto-burns LP on curve completion.
+- **Initial Liquidity Size:**
+  - $< 5\text{ SOL}$: Trivially manipulable; skip.
+  - Exceptionally large initial liquidity from a brand-new wallet: Likely bundled or artificially seeded.
+- **Liquidity-to-Market-Cap Ratio:**
+  - An $\text{MCap} / \text{Liquidity}$ ratio $> 10\times - 15\times$ indicates fragile depth; exit slippage will be prohibitive.
+- **Bonding Curve Progress (%):**
+  - **Early Entry Zone:** $0\% - 5\%$ (earliest snipe window).
+  - **Pre-Migration Zone:** $85\% - 100\%$ (anticipating graduation pump).
+  - **Dead Zone:** $15\% - 80\%$ without momentum is often a stagnation trap.
+- **Migration Event:**
+  - Transition from pump.fun to PumpSwap/Raydium serves as an organic filter. Migrated tokens have survived a $\sim \$60\text{k} - \$70\text{k}$ market cap curve, eliminating immediate zero-effort rugs.
+- **Pool Age & Creation Slot:**
+  - Track pool age in slots to prevent buying re-launched dead contracts and enforce sniper cooldowns (e.g. wait $N$ slots for initial bundler dumps).
+
+---
+
+## 3. Holder Distribution Filters (Most Critical on Solana)
+
+*Over 80% of launchpad memecoin rugs are caught at the holder distribution layer.*
+
+- **Top 10 Non-LP Holders (%):**
+  - Standard threshold: $< 15\% - 25\%$ cumulative supply.
+  - Strict alpha groups require Top 5 $< 10\%$.
+- **Deployer Wallet Share (%):**
+  - Dev holding $> 5\%$: Caution flag.
+  - Dev holding $> 10\%$: **Hard reject**.
+  - Dev holding $0\%$: Flag if dev sold 100% of tokens before public arrival.
+- **Bundled Buys (Jito Same-Slot Bundles):**
+  - Deployers distribute capital across 5–30 fresh wallets and buy in slot 0.
+  - *Detection:* Same slot, common funding root, sequential wallet derivation, identical SOL buy amounts.
+  - *Rule:* Reject if unsold bundled supply $> 20\% - 30\%$.
+- **Sniper Density in Slots 0–2:**
+  - High concentration of bot wallets in the initial slots indicates immediate dump pressure; you will serve as their exit liquidity.
+- **Insider Funding Trees:**
+  - Walk `SystemProgram.transfer` history back 2–4 hops. Wallets funded by the deployer or shared intermediate accounts are classified as dev-controlled.
+- **Fresh Wallet Ratio:**
+  - If $> 50\%$ of supply is held by wallets created $< 24\text{h}$ ago with no prior transaction history, it indicates a sybil/bundle setup.
+- **Holder Growth Velocity:**
+  - Organic growth: $> 100$ distinct active wallets over 5 minutes.
+  - Artificial growth: Hundreds of wallets receiving exact $0.01\%$ transfers in $< 30$ seconds (airdrop/sybil script).
+- **Known Wallet Labels:**
+  - Check against tagged databases (GMGN, Cielo) for Smart Money, KOLs, known serial ruggers, or bot clusters.
+- **Cluster & Graph Analysis (Bubblemaps):**
+  - Reject if an interconnected cluster controls $> 15\% - 20\%$ of circulating supply.
+
+---
+
+## 4. Deployer & Dev Wallet Filters
+
+- **Historical Track Record:**
+  - Inspect all prior mints created by the deployer address.
+  - *Metrics:* Launch count, % of tokens where liquidity was pulled or dev dumped $> 50\%$ within 1 hour, ATH multiples achieved, average token lifespan.
+  - *Heuristic:* $\ge 3$ consecutive prior launches dying in $< 1\text{h} \implies$ **Hard Reject**.
+- **Deployer Funding Source:**
+  - Fresh centralized exchange withdrawal (Binance, Coinbase, OKX, Bybit hot wallet): Neutral to acceptable.
+  - Funded from another deployer wallet, Tornado/mixer, or known rugger cluster: **Hard Reject**.
+- **Deployer Wallet Age & Balance:**
+  - Created $< 1\text{h}$ prior and funded with exact gas needed: Disposable throwaway wallet.
+  - Depleted SOL balance post-launch: Dev has zero skin in the game.
+- **Dev Creation Buy:**
+  - Pump.fun allows devs to buy in the creation transaction. $0\% - 3\%$ is standard; $> 10\%$ represents dump risk.
+- **Real-Time Dev Sells:**
+  - Continuous balance monitoring. Trigger auto-exit if the deployer sells $> 50\%$ of their holdings.
+- **Rug-and-Relaunch Detection:**
+  - Compare name, ticker, metadata hashes, and image perceptual hashes against recently dead tokens to filter relaunch farms.
+
+---
+
+## 5. Trading & Volume Pattern Filters
+
+- **Buy / Sell Ratio in First Minutes:**
+  - Healthy launches maintain buy-side dominance ($> 60\% - 70\%$ buys). $> 40\%$ sell volume in the first 2 minutes signals early distribution.
+- **Unique Buyers vs. Total Transactions:**
+  - 200 trades generated by only 10 unique addresses indicates automated wash trading.
+- **Volume-to-Market-Cap Velocity:**
+  - Unusually high volume paired with flat price action indicates volume bot churn.
+- **Volume Bot Fingerprint:**
+  - Thousands of micro-transactions ($\sim 0.05\text{ SOL}$) alternating rapidly from newly seeded addresses to fake DexScreener trending metrics.
+- **Price Impact & Slippage Simulation:**
+  - Skip if your intended order size moves market price $> 3\% - 5\%$.
+  - Simulate entry via RPC; if required honest slippage exceeds $15\%$, liquidity is thin or manipulated.
+- **RPC Sell Simulation (Honeypot Test):**
+  - Run `simulateTransaction` for an immediate sell before executing buy orders. If the simulated sell reverts or incurs $> 90\%$ slippage, reject.
+- **MEV & Sandwich Bot Density:**
+  - Elevated Jito tip activity on a specific pool signals predatory sandwich bots.
+
+---
+
+## 6. Social & Narrative Filters (Async — Sizing vs. Entry)
+
+*Runs asynchronously to calibrate position sizing and profit targets.*
+
+- **Metadata Completeness:**
+  - Missing website, Twitter, and Telegram entirely: Low-effort spam.
+- **Twitter / X Account Verification:**
+  - Account age, follower engagement ratio, bot ratio, and rename history (detects recycled accounts). Reject dead/fake links.
+- **Telegram Community Dynamics:**
+  - Active chat, organic message velocity, human admin presence.
+- **Website & Domain Quality:**
+  - Domain WHOIS registration age; reject pump.fun generic default landing pages.
+- **Narrative Alignment:**
+  - Does the token capitalize on an active meta (breaking news, celebrity post, AI agent, viral trend)?
+  - First-mover tokens capturing a live viral trend dramatically outperform secondary clones.
+- **KOL & Smart Money Activity:**
+  - Identify whether verified smart wallets or reputable alpha callers have entered. Flag known paid-shill promoters as sell signals.
+- **Ticker Collisions:**
+  - When a breaking event triggers 30 tokens with identical tickers, identify the primary runner by earliest creation slot and organic buyer concentration.
+- **DexScreener Boosts & Visibility:**
+  - Paid DexScreener info updates and community boosts indicate financial commitment from the dev/community.
+
+---
+
+## 7. Timing & Market Regime Filters
+
+- **SOL Macro Trend:**
+  - Memecoin risk appetite heavily correlates with SOL price action. Reduce sizing by $50\%$ or pause operations when SOL is in sharp drawdown.
+- **Intraday Trading Windows:**
+  - Peak liquidity and sustained runners typically occur during the US afternoon and evening sessions (UTC 14:00 – 02:00).
+- **Platform Saturation:**
+  - When daily pump.fun creation volume spikes ($> 30\text{k}$ launches/day), capital attention is diluted; tighten hard filters.
+- **Graduation Rate Health:**
+  - Hourly pump.fun graduation rates below $1\%$ signal market fatigue; tighten entry gates.
+- **Network Congestion:**
+  - High block cluster congestion and elevated compute unit pricing increase dropped transaction rates; pause or raise priority fees.
+
+---
+
+## 8. Robinhood Chain Specifics (Arbitrum Orbit EVM L2)
+
+### 8.1 Current Status & Outlook
+Robinhood Chain is an Arbitrum Orbit L2 (EVM) designed primarily for tokenized assets and regulated instruments. In the event permissionless memecoins launch, EVM contract rules apply.
+
+### 8.2 EVM Filter Checklist (Robinhood Chain / Base / Arbitrum)
+
+| Check | Vulnerability Detail | Required Action |
+| :--- | :--- | :--- |
+| **Contract Verification** | Unverified source code on block explorer | **Immediate Rejection** |
+| **Ownership Renounced** | `owner()` set to dead address (`0x0...dead`) | Must be renounced or restricted |
+| **Upgradeable Proxy** | Dev can swap implementation logic to a drainer | **Reject upgradeable contracts** |
+| **Mint Function** | Callable `mint()` function present | **Immediate Rejection** |
+| **Blacklist / Whitelist** | Functions capable of freezing arbitrary addresses | **Immediate Rejection** |
+| **Max Transaction Limits** | Anti-bot limit that can be maliciously set to zero | Verify non-zero and immutable |
+| **Trading Toggle** | `enableTrading()` or `setTradingOpen()` can pause sells | Verify trading cannot be disabled |
+| **Hidden Tax Functions** | Dynamic fee setter allowing taxes up to $99\%$ | Taxes must be $\le 5\%$ and capped |
+| **Hidden Transfer Logic** | Bytecode overrides on `_transfer` causing honeypots | Automated bytecode analysis |
+| **Honeypot Simulation** | Simulate buy $\to$ sell via `eth_call` | Must pass (GoPlus / Honeypot.is) |
+| **LP Token Lock/Burn** | LP tokens burned or locked in trusted lockers | Must be locked $\ge 30$ days or burned |
+| **Bytecode Similarity** | Hash matches known scam or drainer templates | **Immediate Rejection** |
+
+---
+
+## 9. Scoring Engine: A Representative Model
+
+```yaml
+# ==============================================================================
+# PIPELINE EXECUTION ARCHITECTURE
+# ==============================================================================
+
+HARD_FILTERS (Kill switches — any failure skips token immediately):
+  - mint_authority == null
+  - freeze_authority == null
+  - no_dangerous_token_2022_extensions: true
+  - sell_simulation_succeeds: true
+  - market_cap >= $4,000                   # Strict floor
+  - peak_drawdown_valid: true              # Peak $50k->$5k or $300k->$10k check
+  - bundled_supply_unsold < 30%
+  - top10_holders_supply < 30%
+  - dev_holdings < 15%
+  - deployer_not_blacklisted: true
+  - not_dead_token_relaunch: true
+
+SOFT_SCORE (0 - 100 Points):
+  Distribution (35 Points):
+    - top10_holders < 15%:          +10 pts
+    - dev_holdings < 3%:            +8 pts
+    - bundled_supply < 10%:         +8 pts
+    - fresh_wallet_ratio < 30%:     +5 pts
+    - smart_money_present:          +4 pts
+
+  Deployer Track Record (20 Points):
+    - zero_prior_rugs:              +10 pts
+    - has_prior_runner (>5x):       +6 pts
+    - aged_cex_funded_wallet:       +4 pts
+
+  Liquidity & Order Flow (20 Points):
+    - buy_sell_ratio > 70% (first 2m): +8 pts
+    - unique_buyers > 50 (first 5m):   +7 pts
+    - price_impact_for_size < 3%:      +5 pts
+
+  Social & Narrative (25 Points, Async):
+    - matches_active_meta:             +10 pts
+    - verified_aged_twitter:           +6 pts
+    - smart_kol_wallet_bought:         +5 pts
+    - organic_telegram_community:      +4 pts
+
+POSITION_SIZING:
+  score < 50:  Skip
+  50 - 64:     0.25x Base Size
+  65 - 79:     1.0x Base Size
+  80 - 100:    2.0x Base Size
+
+DYNAMIC_EXIT_TRIGGERS:
+  - Dev sells > 50% of bag
+  - Bundler wallets initiate coordinated dump
+  - Top 10 holder concentration increases sharply
+  - Liquidity drops > 30% from peak
+  - Token breaches drawdown rules from ATH
+```
+
+---
+
+## 10. Common Pitfalls & High-Alpha Improvements
+
+### 10.1 Multi-Hop Funding Tree Analysis
+Most public bots only inspect 1 funding hop. Professional ruggers route SOL through 3–5 intermediate accounts or CEX sub-wallets. Constructing a complete multi-hop wallet graph delivers a primary edge.
+
+### 10.2 Dynamic Real-Time Bundle Unwind Tracking
+Static bundle metrics only measure holdings at launch. Monitoring the **real-time unwind** of bundle wallets allows snipers to buy the post-bundle dip once sniper and deployer supply has cleared.
+
+### 10.3 Bayesian Deployer Reputation Modeling
+Rather than binary whitelists/blacklists, maintain a Bayesian probability distribution of a deployer's expected outcome based on historical launch multiples and liquidity durations.
+
+### 10.4 Intelligent Narrative De-duplication & Clone Detection
+Deploy perceptual image hashing (`pHash`) and ticker/name fuzzy string matching. Automatically identify the original launch within the first 60 seconds among dozens of copycats.
+
+### 10.5 Continuous Post-Buy Sell Simulation
+Rugs often arm after public entry (e.g. changing Token-2022 fees or altering DEX state). Continuously re-simulate sell execution via RPC every few seconds while holding.
+
+### 10.6 Ultra-Low-Latency Social Ingestion
+Standard polling of Twitter/Telegram introduces 30–60s delays. Connecting directly to filtered firehose streams or alpha group listeners detects token addresses seconds ahead of general distribution.
+
+### 10.7 Dynamic Regime-Adaptive Filtering
+Hardcoded thresholds fail during regime shifts. Automatically tighten liquidity and holder distribution criteria when market-wide graduation rates drop, and relax them during breakout cycles.
+
+### 10.8 Sniper-vs-Sniper Density Modeling
+Measure the ratio of bot wallets entering in slots 0–2. If slot 0 is dominated by known sniper bots, exit liquidity risk is extreme.
+
+### 10.9 Survival-Based Backtesting (PnL vs. Rug Rate)
+Evaluating filters solely by rug avoidance often eliminates top runners (e.g., hyper-viral tokens naturally exhibit higher initial holder concentration). Optimize filters for net PnL impact rather than raw rug rate.
+
+### 10.10 Proprietary Smart/Dumb Money Wallet Labeling
+Replace public labels (GMGN, Cielo) with proprietary tracking: wallets maintaining $\ge 60\%$ win rates across $\ge 30$ closed trades over 120 days. Conversely, track persistent top-buyers as contrarian signals.
+
+### 10.11 Vision & LLM Token Quality Scoring
+Run fast ($\sim 1\text{s}$) async vision/multimodal passes over token images and names to filter low-effort AI slop from high-potential cultural memes.
+
+### 10.12 Continuous Post-Entry Exit Filters
+Most trading capital is lost on delayed exits rather than poor entries. Run continuous monitoring on holder concentration, buy/sell ratios, liquidity health, and developer transactions.
+
+---
+
+## 11. Data Sources & Tooling Architecture (Solana)
+
+### 11.1 Real-Time On-Chain Streams
+- **gRPC / Geyser Feeds:** Helius, Triton, QuickNode Yellowstone gRPC for sub-slot transaction and account monitoring.
+- **Jito MEV Block Engine:** Bundle submission and real-time same-slot multi-transaction bundle analysis.
+- **Direct Program Subscriptions:** WebSocket/gRPC streams watching pump.fun bonding curve account state.
+
+### 11.2 Token Security Verification
+- **Native On-Chain RPC Ingestion:** Direct account deserialization for mint/freeze authorities (fastest).
+- **RugCheck API & GoPlus:** Secondary validation for multi-chain and metadata checks.
+
+### 11.3 Holder & Wallet Intelligence
+- **Bubblemaps API:** Algorithmic cluster detection.
+- **Helius DAS (Digital Asset Standard) API:** High-speed asset ownership and wallet transaction histories.
+- **Internal Graph Database:** PostgreSQL / Neo4j tracking funding trees and wallet associations.
+
+### 11.4 Market & Pricing Data
+- **Raydium & PumpSwap AMM Subscriptions:** Direct pool reserve parsing for zero-latency pricing.
+- **DexScreener & Jupiter APIs:** Aggregated pricing and volume analytics.
+
+### 11.5 Social & Narrative Monitoring
+- **X (Twitter) API v2 Filtered Stream:** Real-time contract mention monitoring.
+- **Telethon / Pyrogram Listener Bots:** Automated monitoring of major alpha call channels.
+
+---
+
+## 12. Reality Check & Execution Strategy
+
+- **Base Rates:** Out of 20,000–40,000 tokens launched daily on pump.fun, over $98\%$ fail to graduate. Of those that graduate, the majority retrace to near-zero within 24 hours.
+- **Filter Limitations:** Rigorous filtering lifts win-rates from $\sim 1\%$ to $10\% - 15\%$. The remaining edge relies entirely on **execution speed, disciplined sizing, and dynamic exit management**.
+- **Adversarial Reality:** Serial deployers actively optimize to bypass basic checks (e.g. revoking authorities, scattering bundles across aged wallets). Long-term edge is derived from **deep funding-graph analysis, real-time bundle tracking, and wallet clustering**.
+
+---
+
+## 13. 4-Month Smart Wallet Historical Crawler & Anti-Luck Architecture
+
+### 13.1 Why 4 Months (120 Days)?
+- **Seasonality & Endurance:** A 30-day window is easily skewed by 1–2 lucky trades. A 120-day window tests endurance across diverse market cycles and market sentiment regimes.
+- **System Parameters:**
+  - `LOOKBACK_DAYS = 120`
+  - `LOOKBACK_MS = 120 * 24 * 3600 * 1000` ($10,368,000,000\text{ ms}$)
+  - CLI execution: `node backend/scripts/find-smart-wallets.js --days=120 --chain=all`
+
+### 13.2 Anti-Luck Heuristic Criteria
+To eliminate one-hit wonders and insider single-token windfalls, wallets must satisfy:
+1. **Trade Volume:** $\ge 30$ closed positions in the 120-day window.
+2. **Net Realized PnL:** Net positive across 30-day and 120-day periods in both USD and SOL.
+3. **Win Rate:** $\ge 60\%$ on closed trades.
+4. **Discrete Micro-Cap Entry Distribution:** Proven history of early entries across tiers.
+
+### 13.3 Runner All-Time High Qualification & The 25% of ATH Rule
+A runner token is defined as having achieved an All-Time High (ATH) market cap of **$\ge \$1,000,000$** (raised from $\$500\text{k}$). To qualify as an early buyer, the wallet must have purchased at an entry market cap **$\le 25\%$ of the token's ATH**:
+- **Megacap ($\ge \$50\text{M}$ ATH):** Entry $\le \$12.5\text{M}$ ($25\%$ of ATH).
+- **~10M Breakouts ($8\text{M} - 50\text{M}$ ATH):** Entry $\le \$2.5\text{M}$ ($25\%$ of ATH).
+- **~5M Early Runners ($3\text{M} - 8\text{M}$ ATH):** Entry $\le \$1.25\text{M}$ ($25\%$ of ATH).
+- **$\ge \$1\text{M}$ Baseline Runners ($1\text{M} - 3\text{M}$ ATH):** Entry $\le \$250\text{k}$ ($25\%$ of ATH).
+
+### 13.4 Dual-Method Candidate Ingestion
+Early buyers for $\ge \$1\text{M}$ ATH runners are ingested via two complementary paths:
+1. **Method 1: Buying Market Cap (`buying_mcap`):** Entry market cap $\le 25\%$ of ATH. **Must be profitable (`profitUsd > 0`).**
+2. **Method 2: First N Buyers (`first_n_buyers`):** Earliest chronological buyers up to quota ($100 + 20$ per $\$1\text{M}$ above $\$1\text{M}$). **Must be profitable (`profitUsd > 0`).**
+3. **Dual Qualification:** Wallets meeting both methods earn the `⚡ Mcap ≤25% + First N` badge.
+
+### 13.5 Unified 7-Column Execution Metric Terminal (Smart & Tracked)
+Both Smart Wallets and Tracked Candidate Wallets are monitored with an identical 7-column execution layout:
+- **`Wallet Address`:** Address, explorer link, Twitter handle, qualification method badge, and runner early buyer pill (`🎯 Early #rank · $SYMBOL`).
+- **`PnL`:** 30-day net realized profit (`fmtUsd`).
+- **`Win Rate`:** Percentage of winning closed positions (`winRate.toFixed(1)%`).
+- **`Buy/Win`:** Total won trades vs total buys (`X won / Y buys`).
+- **`Avg Buy Mcap`:** Mean entry market cap (`fmtCurrency`) with entry token purchase price subtext (`fmtPrice`).
+- **`Avg Sell Mcap`:** Mean exit market cap (`fmtCurrency`) with exit selling price subtext (`fmtPrice`).
+- **`Avg Holding Time`:** Holding period (`s`, `m`, `h`, `d`) from GMGN closed trades (`avg_holding_period`).
+- **`Actions`:** 1-click **Promote** button (for tracked candidates to graduate into verified smart wallets), GMGN link, and delete button.
+
+### 13.6 Execution Metrics Pipeline & Backfill
+- **GMGN Extraction:** Direct extraction of `pnl_stat.avg_holding_period` and activity execution prices/supplies via GMGN CLI.
+- **Fallback Derivation:** `deriveExecutionMetrics()` reliably computes metrics for rate-limited records.
+- **Backfill CLI & API:** Standalone script `backend/scripts/backfill-metrics.js` and endpoint `POST /api/smart-wallets/backfill`.
+- **Dual Persistence:** Automatic synchronization across PostgreSQL (`smart_wallets` table) and local JSON store (`backend/data/smart-wallets.json`).
+
+---
+
+## 14. Early Meme Caller Specification (~40k MCap / $6k+ 5m Vol Engine)
+
+### 14.1 Core Signal Philosophy
+The **Early Meme Caller** identifies tokens in their breakout velocity window—after initial sniper bot volatility has settled, but prior to widespread social promotion.
+
+### 14.2 Breakout Signal Signature
+1. **Market Cap Sweet Spot:**
+   - Range: $\$20,000 - \$150,000$
+   - Target sweet spot: **$\sim \$35,000 - \$60,000$ (centered at $\sim \$40\text{k}$)**.
+2. **5-Minute Volume Velocity:**
+   - Minimum 5m volume: $> \$5,000$ (target $> \$6,000$).
+   - Velocity ratio: $5\text{m Volume} / \text{Market Cap} \ge 10\% - 15\%$.
+3. **Liquidity Depth & Health:**
+   - Minimum liquidity: $> \$3,500$ (target $> \$4,500$).
+   - $\text{MCap} / \text{Liquidity} \le 10\times - 12\times$.
+4. **Order Flow & Buyer Dominance:**
+   - $5\text{m Buy/Sell Ratio} \ge 1.25\times$ ($55\% - 60\%$ buyers).
+   - Unique transaction count: $\ge 8 - 10$ distinct buyer wallets within 5 minutes.
+5. **Smart Money Confluence:**
+   - At least 1 verified smart wallet from the 120-day crawler database holding or actively buying.
+6. **Safety Clearance:**
+   - Mint authority revoked (`null`).
+   - Freeze authority revoked (`null`).
+   - Top 10 non-bonding curve holders $\le 50\%$ supply.
+
+### 14.3 Pipeline Surfacing
+- Evaluated via `backend/src/analysis/earlyCaller.js` (`evaluateEarlyCaller(token)`).
+- Fast-tracks approved tokens to **Alpha Calls** with the `🚀 Early Runner` strategy tag.
+- Emits real-time WebSocket event: `token:early-call`.
+
+---
+
+## 15. Market Cap Floor & Peak Drawdown Eviction Rules
+
+To keep the **Alpha Calls** and **Tracked Watchlist** focused on viable tokens, strict eviction gates are continuously enforced in `registry.js` and `tracked.js`:
+
+### 15.1 Absolute Market Cap Floor ($< \$4\text{k}$)
+- **Rule:** Any token with $\text{MCap} < \$4,000$ is immediately evicted from **Alpha Calls** (`state = 'discarded'`) and **Tracked Watchlist** (`untrack(mint)`).
+- **Gate:** Tokens with $\text{MCap} < \$4,000$ are barred from promotion into Alpha Calls or Tracked status.
+
+### 15.2 Peak ATH Drawdown Evictions
+Tokens that have experienced terminal pump-and-dump crashes are purged regardless of prior scores:
+- **\$50k Peak Collapse:** If all-time-high market cap peaked at $\ge \$50,000$ and current market cap drops below **$\$5,000$**, the token is immediately evicted.
+- **\$300k Peak Collapse:** If all-time-high market cap peaked at $\ge \$300,000$ and current market cap drops below **$\$10,000$**, the token is immediately evicted.
+
+### 15.3 Continuous Lifecycle Enforcement
+- `peakMarketCapUsd` is continuously tracked and updated on discovery, during re-analysis passes, and on every live price tick.
+- Breaches immediately trigger `discard(token)` and `untrack(mint)`, removing the token across both backend registries and frontend tables.

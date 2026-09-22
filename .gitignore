@@ -69,6 +69,7 @@ $RECYCLE.BIN/
 !.vscode/extensions.json
 
 # Tools & AI Agent internal files
+.superpowers/
 .agent/
 .agents/
 .claude/

@@ -1,67 +1,213 @@
-// Smart-wallet finder sources (Solana + Robinhood/EVM).
-// Primary: pump.fun leaderboard, fomo.family (via fomoapi.io), GMGN smart money.
-// Extras under review: Cielo, Arkham, Birdeye.
-//
-// Design notes from docs/context for meme filter.md + strategy docs:
-// - Prefer official API/CLI over scraping (Cloudflare blocks datacenter scraping).
-// - GMGN access is backend-only via gmgn-cli --raw + GMGN_API_KEY env.
-// - Tokens keyed by (chainId, tokenAddress); wallets keyed by (chain, address).
-// - Discovery never buys; finder only records observations for the tracker.
+// Smart-wallet finder sources for Solana and Robinhood Chain (Chain ID 4663).
+// Categorized by role: Discovery / Leaderboards, Live Alerts, Convergence, Verification.
+// Includes pricing tier: 'free', 'freemium', 'paid'.
 
 export const SMART_WALLET_SOURCES = [
+  // --- SOLANA MEME SOURCES ---
   {
-    id: 'pumpfun-leaderboard',
-    label: 'pump.fun leaderboard',
-    chains: ['solana'],
-    kind: 'leaderboard',
-    // Public page: https://pump.fun/leaderboard (PnL windows 1D/1W/1M).
-    // No stable public REST; use profile/swap/market APIs or SolanaTracker
-    // PnL v2 (GET /v2/pnl/leaderboard) where configured. Scraping is fallback only.
-    endpoint: 'https://pump.fun/leaderboard',
-    apiHint: 'solanatracker /v2/pnl/leaderboard or pump.fun profile-api (reverse-engineered)',
+    id: 'gmgn',
+    label: 'GMGN Smart Money',
+    chain: 'solana',
+    url: 'https://gmgn.ai/',
+    role: 'primary-discovery',
+    pricing: 'free',
+    desc: 'Default Solana smart-money tab. Filter by 7d/30d PnL, win rate, and trade count.',
+    status: 'active-api',
   },
   {
-    id: 'fomo-leaderboard',
-    label: 'fomo.family leaderboard (fomoapi.io)',
-    chains: ['solana', 'robinhood'],
-    kind: 'leaderboard',
-    // Independent REST layer for fomo.family social trading data.
-    // GET /v2/leaderboard/{24h|7d|30d|all} returns handle + solana/evm wallets + pnlUsd.
-    endpoint: 'https://api.fomoapi.io/v2/leaderboard/30d',
-    docs: 'https://fomoapi.io/docs',
+    id: 'fomo-solana',
+    label: 'FOMO (fomo.family)',
+    chain: 'solana',
+    url: 'https://fomo.family/',
+    role: 'social-smart-money',
+    pricing: 'free',
+    desc: 'Top social meme traders ranked by 30d realized PnL, win rates, and token theses.',
+    status: 'active-api',
   },
   {
-    id: 'gmgn-smart-money',
-    label: 'GMGN smart money',
-    chains: ['solana', 'robinhood'],
-    kind: 'onchain-intelligence',
-    // Backend-only via gmgn-cli --raw (GMGN_API_KEY in backend/.env).
-    // Fields: smart_degen_count, rug_ratio, bundler_rate, top_10_holder_rate.
-    endpoint: 'gmgn-cli (market trending --raw / trenches --raw)',
+    id: 'kolscan',
+    label: 'Kolscan',
+    chain: 'solana',
+    url: 'https://kolscan.io/',
+    role: 'kol-leaderboard',
+    pricing: 'free',
+    desc: 'Top KOL / meme-trader leaderboard and alpha caller tracker.',
+    status: 'active-api',
   },
   {
     id: 'cielo',
-    label: 'Cielo (under review)',
-    chains: ['solana', 'robinhood'],
-    kind: 'wallet-labels',
-    status: 'research',
-  },
-  {
-    id: 'arkham',
-    label: 'Arkham (under review)',
-    chains: ['robinhood'],
-    kind: 'wallet-labels',
-    status: 'research',
+    label: 'Cielo Finance',
+    chain: 'solana',
+    url: 'https://cielo.finance/',
+    role: 'live-alerts',
+    pricing: 'freemium',
+    desc: 'Watchlist + real-time alerts when a smart wallet buys or sells.',
+    status: 'active-webhook',
   },
   {
     id: 'birdeye',
-    label: 'Birdeye top traders (under review)',
-    chains: ['solana'],
-    kind: 'market-data',
-    status: 'research',
+    label: 'Birdeye',
+    chain: 'solana',
+    url: 'https://birdeye.so/',
+    role: 'profiler',
+    pricing: 'freemium',
+    desc: 'Trader profiles, verified PnL, token holdings on any Solana wallet.',
+    status: process.env.BIRDEYE_API_KEY ? 'active-api' : 'public-tier',
+  },
+  {
+    id: 'nansen-solana',
+    label: 'Nansen Smart Money',
+    chain: 'solana',
+    url: 'https://nansen.ai/',
+    role: 'institutional-intelligence',
+    pricing: 'paid',
+    desc: 'Nansen Smart Trader labels, token netflow, and DEX trade feeds.',
+    status: process.env.NANSEN_API_KEY ? 'active-api' : 'csv-and-profiler',
+  },
+  {
+    id: 'madeonsol',
+    label: 'MadeOnSol',
+    chain: 'solana',
+    url: 'https://madeonsol.com/',
+    role: 'wallet-scanner',
+    pricing: 'free',
+    desc: 'KOL tracker and automated launch sniper scanner.',
+    status: 'active-web',
+  },
+  {
+    id: 'mememoves',
+    label: 'MemeMoves Smart Money',
+    chain: 'solana',
+    url: 'https://mememoves.com/smart-money',
+    role: 'convergence',
+    pricing: 'free',
+    desc: 'Detects tokens that multiple profitable meme wallets accumulate simultaneously.',
+    status: 'active-engine',
+  },
+  {
+    id: 'uwuu',
+    label: 'uwuu',
+    chain: 'solana',
+    url: 'https://uwuu.ai/',
+    role: 'pnl-leaderboard',
+    pricing: 'free',
+    desc: 'PnL leaderboard and copy-trading tracking.',
+    status: 'active-web',
+  },
+  {
+    id: 'solscan',
+    label: 'Solscan',
+    chain: 'solana',
+    url: 'https://solscan.io/',
+    role: 'verification',
+    pricing: 'free',
+    desc: 'Raw on-chain block explorer for validating transaction signatures and SPL token transfers.',
+    status: 'explorer',
+  },
+
+  // --- ROBINHOOD CHAIN (4663) SOURCES ---
+  {
+    id: 'luma',
+    label: 'Luma',
+    chain: 'robinhood',
+    url: 'https://withluma.app/',
+    role: 'primary-discovery',
+    pricing: 'free',
+    desc: 'Main Robinhood intelligence feed. Tracks 1,000+ smart wallets on Base + Robinhood. Convergence maps and ranks.',
+    status: 'active-web',
+  },
+  {
+    id: 'fomo-robinhood',
+    label: 'FOMO (fomo.family EVM)',
+    chain: 'robinhood',
+    url: 'https://fomo.family/',
+    role: 'social-smart-money',
+    pricing: 'free',
+    desc: 'Top EVM social meme traders ranked by 30d realized PnL and trade counts.',
+    status: 'active-api',
+  },
+  {
+    id: 'nockscout',
+    label: 'Nock Scout',
+    chain: 'robinhood',
+    url: 'https://nockterminal.com/wallets',
+    role: 'copyable-pnl',
+    pricing: 'free',
+    desc: 'Robinhood wallet leaderboard ranked by copyable PnL rather than raw wallet size.',
+    status: 'active-api',
+  },
+  {
+    id: 'dune-robinhood',
+    label: 'Dune Robinhood Analytics',
+    chain: 'robinhood',
+    url: 'https://dune.com/geggonen/robinhood-chain-analytics',
+    role: 'onchain-pnl-leaderboard',
+    pricing: 'free',
+    desc: 'Robinhood Chain memecoin alpha / rekt leaderboard with 30d realized PnL.',
+    status: 'active-query',
+  },
+  {
+    id: 'hoodscan',
+    label: 'HoodScan',
+    chain: 'robinhood',
+    url: 'https://hoodscan.co/',
+    role: 'explorer-whales',
+    pricing: 'free',
+    desc: 'Robinhood Chain explorer & whale/activity views.',
+    status: 'explorer',
+  },
+  {
+    id: 'robinscan',
+    label: 'RobinScan',
+    chain: 'robinhood',
+    url: 'https://robinscan.xyz/',
+    role: 'explorer-whales',
+    pricing: 'free',
+    desc: 'Robinhood Chain explorer & whale tracking.',
+    status: 'explorer',
+  },
+  {
+    id: 'blockscout-robinhood',
+    label: 'Robinhood Blockscout',
+    chain: 'robinhood',
+    url: 'https://robinhoodchain.blockscout.com/',
+    role: 'verification',
+    pricing: 'free',
+    desc: 'Official Robinhood Chain block explorer to verify raw transactions and contract calls.',
+    status: 'explorer',
+  },
+  {
+    id: 'goldsky-robinhood',
+    label: 'Goldsky Indexer',
+    chain: 'robinhood',
+    url: 'https://goldsky.com/',
+    role: 'subgraphs-indexer',
+    pricing: 'freemium',
+    desc: 'Official subgraph indexer for Robinhood Chain Arbitrum Orbit DEX swaps and pools.',
+    status: 'active-api',
+  },
+  {
+    id: 'pons-robinhood',
+    label: 'PONS Terminal',
+    chain: 'robinhood',
+    url: 'https://pons.trade/',
+    role: 'stream-firehose',
+    pricing: 'free',
+    desc: 'Real-time launch stream and trade firehose for Robinhood Chain memecoins.',
+    status: 'active-stream',
+  },
+  {
+    id: 'defade-robinhood',
+    label: 'DeFade Forensics',
+    chain: 'robinhood',
+    url: 'https://defade.io/',
+    role: 'safety-forensics',
+    pricing: 'free',
+    desc: 'Honeypot detection, rug risk scoring, and deployer forensics on Robinhood Chain.',
+    status: 'active-scanner',
   },
 ];
 
 export function sourcesForChain(chain) {
-  return SMART_WALLET_SOURCES.filter(s => s.chains.includes(chain));
+  return SMART_WALLET_SOURCES.filter(s => s.chain === chain);
 }

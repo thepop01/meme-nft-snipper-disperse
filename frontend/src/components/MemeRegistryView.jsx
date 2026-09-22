@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
 import { RefreshCw, Search } from 'lucide-react';
 import { getBackendUrl, authHeaders } from '../utils/sniperApi';
+import Pagination from './ui/Pagination.jsx';
 
 function fmtCurrency(val) {
   const n = Number(val);
@@ -34,16 +35,37 @@ function getMemeChain(meme) {
 }
 
 export default function MemeRegistryView({ initialMemes = null, initialChain = 'all' } = {}) {
+  const isClientSide = Boolean(initialMemes);
   const [memes, setMemes] = useState(initialMemes ? { memes: initialMemes } : null);
   const [loading, setLoading] = useState(!initialMemes);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all'); // 'all' | 'backfilled' | 'pending_worker3'
   const [chainTab, setChainTab] = useState(initialChain); // 'all' | 'solana' | 'robinhood'
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
-  const fetchMemes = async () => {
+  // Debounce search by 200ms
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const fetchMemes = useCallback(async () => {
+    if (isClientSide) return;
     setLoading(true);
     try {
-      const res = await fetch(`${getBackendUrl()}/api/memes/registry`, {
+      const params = new URLSearchParams({
+        chain: chainTab,
+        status: filterStatus,
+        search: debouncedSearch.trim(),
+        page: String(page),
+        pageSize: String(pageSize),
+      });
+      const res = await fetch(`${getBackendUrl()}/api/memes/registry?${params.toString()}`, {
         headers: authHeaders(),
       });
       if (!res.ok) throw new Error(`Backend response ${res.status}`);
@@ -54,36 +76,55 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
     } finally {
       setLoading(false);
     }
-  };
+  }, [isClientSide, chainTab, filterStatus, debouncedSearch, page, pageSize]);
 
   useEffect(() => {
-    if (!initialMemes) {
+    if (!isClientSide) {
       fetchMemes();
     }
-  }, [initialMemes]);
+  }, [isClientSide, fetchMemes]);
 
-  const allMemes = useMemo(() => memes?.memes || [], [memes]);
+  // Client-side calculations when initialMemes is provided (e.g. tests or SSR)
+  const clientAllMemes = useMemo(() => initialMemes || [], [initialMemes]);
 
-  const solanaCount = useMemo(() =>
-    allMemes.filter(m => getMemeChain(m) === 'solana').length,
-    [allMemes]
-  );
-  const robinhoodCount = useMemo(() =>
-    allMemes.filter(m => getMemeChain(m) === 'robinhood').length,
-    [allMemes]
-  );
+  const solanaCount = useMemo(() => {
+    if (isClientSide) return clientAllMemes.filter(m => getMemeChain(m) === 'solana').length;
+    return memes?.solanaCount ?? (memes?.memes || []).filter(m => getMemeChain(m) === 'solana').length;
+  }, [isClientSide, clientAllMemes, memes]);
+
+  const robinhoodCount = useMemo(() => {
+    if (isClientSide) return clientAllMemes.filter(m => getMemeChain(m) === 'robinhood').length;
+    return memes?.robinhoodCount ?? (memes?.memes || []).filter(m => getMemeChain(m) === 'robinhood').length;
+  }, [isClientSide, clientAllMemes, memes]);
+
+  const totalAllChains = useMemo(() => {
+    if (isClientSide) return clientAllMemes.length;
+    if (memes?.solanaCount != null && memes?.robinhoodCount != null) {
+      return memes.solanaCount + memes.robinhoodCount;
+    }
+    return memes?.total ?? (memes?.memes || []).length;
+  }, [isClientSide, clientAllMemes.length, memes]);
 
   const activePool = useMemo(() => {
+    if (!isClientSide) return memes?.memes || [];
     if (chainTab === 'solana') {
-      return allMemes.filter(m => getMemeChain(m) === 'solana');
+      return clientAllMemes.filter(m => getMemeChain(m) === 'solana');
     }
     if (chainTab === 'robinhood') {
-      return allMemes.filter(m => getMemeChain(m) === 'robinhood');
+      return clientAllMemes.filter(m => getMemeChain(m) === 'robinhood');
     }
-    return allMemes;
-  }, [allMemes, chainTab]);
+    return clientAllMemes;
+  }, [isClientSide, clientAllMemes, chainTab, memes]);
+
+  const activePoolTotal = useMemo(() => {
+    if (isClientSide) return activePool.length;
+    if (chainTab === 'solana') return solanaCount;
+    if (chainTab === 'robinhood') return robinhoodCount;
+    return totalAllChains;
+  }, [isClientSide, activePool.length, chainTab, solanaCount, robinhoodCount, totalAllChains]);
 
   const filteredMemes = useMemo(() => {
+    if (!isClientSide) return memes?.memes || [];
     let list = activePool;
 
     // Status filter
@@ -100,191 +141,142 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
       m.symbol?.toLowerCase().includes(q) ||
       (m.contractAddress || m.ca)?.toLowerCase().includes(q)
     );
-  }, [activePool, filterStatus, search]);
+  }, [isClientSide, activePool, filterStatus, search, memes]);
 
-  const backfilledCount = useMemo(() =>
-    activePool.filter(m => m.backfilled === true).length,
-    [activePool]
-  );
-  const pendingCount = useMemo(() =>
-    activePool.filter(m => m.backfilled !== true).length,
-    [activePool]
-  );
+  const backfilledCount = useMemo(() => {
+    if (!isClientSide && memes?.backfilledCount != null) return memes.backfilledCount;
+    return activePool.filter(m => m.backfilled === true).length;
+  }, [isClientSide, memes, activePool]);
+
+  const pendingCount = useMemo(() => {
+    if (!isClientSide && memes?.pendingCount != null) return memes.pendingCount;
+    return activePool.filter(m => m.backfilled !== true).length;
+  }, [isClientSide, memes, activePool]);
+
+  const totalFilteredCount = useMemo(() => {
+    if (!isClientSide) return memes?.total ?? (memes?.memes || []).length;
+    return filteredMemes.length;
+  }, [isClientSide, memes, filteredMemes.length]);
+
+  const totalPages = useMemo(() => {
+    if (!isClientSide) return memes?.totalPages ?? 1;
+    return Math.max(1, Math.ceil(totalFilteredCount / pageSize));
+  }, [isClientSide, memes, totalFilteredCount, pageSize]);
+
+  const displayedMemes = useMemo(() => {
+    if (!isClientSide) return memes?.memes || [];
+    const start = (page - 1) * pageSize;
+    return filteredMemes.slice(start, start + pageSize);
+  }, [isClientSide, memes, filteredMemes, page, pageSize]);
 
   return (
     <div className="meme-terminal-container">
-      {/* Page Header */}
-      <div className="page-header page-header-row meme-page-header">
-        <div>
-          <span className="page-eyebrow">🎯 Active Focus Workspace · Distributed Meme Workers</span>
-          <h2>Tracked Memes Registry</h2>
-          <p>
-            Memes discovered and tracked for wallet backfilling across Solana &amp; Robinhood: Worker 1 captures Current Mcap &gt; $2M,
-            Worker 2 ATH Mcap &gt; $4M, and Worker 3 harvests early buyer wallets.
-          </p>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(99, 102, 241, 0.08)',
-            border: '1px solid rgba(99, 102, 241, 0.25)',
-            padding: '4px 12px',
-            borderRadius: '20px',
-            fontSize: '0.78rem',
-            color: '#818cf8',
-            marginTop: '0.5rem',
-          }}>
-            <span>🎯 Focus Mode: <strong>Finding Tracked Memes</strong></span>
-            <span style={{ color: '#64748b' }}>·</span>
-            <span>Solana &amp; EVM page scanners paused</span>
-            <span style={{ color: '#64748b' }}>·</span>
-            <NavLink to="/smart-wallets" style={{ color: '#a5b4fc', textDecoration: 'underline' }}>
-              Switch to Tracked Wallets →
-            </NavLink>
-          </div>
+      {/* Header: Title & Refresh */}
+      <div className="page-header page-header-row meme-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0 }}>Tracked Memes Registry</h2>
+          <span style={{ fontSize: '0.7rem', color: '#6b7280', background: '#f3f4f6', padding: '2px 8px', borderRadius: '4px' }}>
+            Distributed Meme Workers (Worker 1 · Worker 2 · Worker 3)
+          </span>
         </div>
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        <button
+          type="button"
+          className="icon-button-ghost"
+          onClick={fetchMemes}
+          title="Refresh memes"
+        >
+          <RefreshCw size={14} className={loading ? 'spin' : ''} />
+        </button>
+      </div>
+
+      {/* Consolidated Filter Toolbar: Chains, Status Filters, and Search */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
+        {/* Chain Tabs */}
+        <div className="strategy-tab-bar" style={{ margin: 0, display: 'flex', gap: '0.3rem' }}>
           <button
             type="button"
-            className="icon-button-ghost"
-            onClick={fetchMemes}
-            title="Refresh memes"
+            className={`strategy-tab ${chainTab === 'all' ? 'active' : ''}`}
+            onClick={() => { setChainTab('all'); setPage(1); }}
+            style={{ padding: '0.22rem 0.55rem', fontSize: '0.72rem' }}
           >
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
+            <span>All Chains</span>
+            <span className="strategy-tab-badge">{totalAllChains}</span>
+          </button>
+          <button
+            type="button"
+            className={`strategy-tab ${chainTab === 'solana' ? 'active' : ''}`}
+            onClick={() => { setChainTab('solana'); setPage(1); }}
+            style={{ padding: '0.22rem 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+          >
+            <span style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: '#9333ea' }} />
+            <span>Solana</span>
+            <span className="strategy-tab-badge">{solanaCount}</span>
+          </button>
+          <button
+            type="button"
+            className={`strategy-tab ${chainTab === 'robinhood' ? 'active' : ''}`}
+            onClick={() => { setChainTab('robinhood'); setPage(1); }}
+            style={{ padding: '0.22rem 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+          >
+            <span style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: '#10b981' }} />
+            <span>Robinhood / EVM</span>
+            <span className="strategy-tab-badge">{robinhoodCount}</span>
           </button>
         </div>
-      </div>
 
-      {/* Dedicated Chain Tabs */}
-      <div className="strategy-tab-bar" style={{ marginBottom: '1rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className={`strategy-tab ${chainTab === 'all' ? 'active' : ''}`}
-          onClick={() => setChainTab('all')}
-        >
-          <span>All Chains</span>
-          <span className="strategy-tab-badge">{allMemes.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`strategy-tab ${chainTab === 'solana' ? 'active' : ''}`}
-          onClick={() => setChainTab('solana')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-        >
-          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#9333ea' }} />
-          <span>Solana</span>
-          <span className="strategy-tab-badge">{solanaCount}</span>
-        </button>
-        <button
-          type="button"
-          className={`strategy-tab ${chainTab === 'robinhood' ? 'active' : ''}`}
-          onClick={() => setChainTab('robinhood')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-        >
-          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
-          <span>Robinhood / EVM</span>
-          <span className="strategy-tab-badge">{robinhoodCount}</span>
-        </button>
-      </div>
-
-      {/* KPI Strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.8rem', marginBottom: '1.25rem' }}>
-        <div
-          className="card"
-          style={{ padding: '0.8rem 1rem', background: 'var(--card-bg, #ffffff)', border: filterStatus === 'all' ? '2px solid #6366f1' : '1px solid var(--border-color, #e5e7eb)', borderRadius: '8px', cursor: 'pointer' }}
-          onClick={() => setFilterStatus('all')}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem' }}>
-            <span>All Memes{chainTab === 'solana' ? ' (Solana)' : chainTab === 'robinhood' ? ' (Robinhood)' : ''}</span>
-          </div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#111827' }}>
-            {activePool.length}
-          </div>
+        {/* Status Filter Buttons with Live Counts */}
+        <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className={`btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => { setFilterStatus('all'); setPage(1); }}
+            style={{ padding: '0.22rem 0.55rem', fontSize: '0.72rem' }}
+          >
+            <span>All ({activePoolTotal})</span>
+            <span style={{ display: 'none' }}>All Memes: {activePoolTotal}</span>
+          </button>
+          <button
+            type="button"
+            className={`btn-sm ${filterStatus === 'backfilled' ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => { setFilterStatus('backfilled'); setPage(1); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.22rem 0.55rem', fontSize: '0.72rem' }}
+          >
+            ✅ Backfilled ({backfilledCount})
+          </button>
+          <button
+            type="button"
+            className={`btn-sm ${filterStatus === 'pending_worker3' ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => { setFilterStatus('pending_worker3'); setPage(1); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.22rem 0.55rem', fontSize: '0.72rem' }}
+          >
+            ⏳ Pending Worker 3 ({pendingCount})
+          </button>
         </div>
 
-        <div
-          className="card"
-          style={{ padding: '0.8rem 1rem', background: 'var(--card-bg, #ffffff)', border: filterStatus === 'backfilled' ? '2px solid #059669' : '1px solid var(--border-color, #e5e7eb)', borderRadius: '8px', cursor: 'pointer' }}
-          onClick={() => setFilterStatus('backfilled')}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-              ✅ Backfilled
-            </span>
-          </div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#059669' }}>
-            {backfilledCount}
-          </div>
-        </div>
-
-        <div
-          className="card"
-          style={{ padding: '0.8rem 1rem', background: 'var(--card-bg, #ffffff)', border: filterStatus === 'pending_worker3' ? '2px solid #f59e0b' : '1px solid var(--border-color, #e5e7eb)', borderRadius: '8px', cursor: 'pointer' }}
-          onClick={() => setFilterStatus('pending_worker3')}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#6b7280', fontSize: '0.75rem', marginBottom: '0.3rem' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-              ⏳ Pending Worker 3
-            </span>
-          </div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 'bold', color: '#f59e0b' }}>
-            {pendingCount}
-          </div>
-        </div>
-      </div>
-
-      {/* Filter Buttons */}
-      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <button
-          type="button"
-          className={`btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-outline'}`}
-          onClick={() => setFilterStatus('all')}
-        >
-          All ({activePool.length})
-        </button>
-        <button
-          type="button"
-          className={`btn-sm ${filterStatus === 'backfilled' ? 'btn-primary' : 'btn-outline'}`}
-          onClick={() => setFilterStatus('backfilled')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-        >
-          ✅ Backfilled ({backfilledCount})
-        </button>
-        <button
-          type="button"
-          className={`btn-sm ${filterStatus === 'pending_worker3' ? 'btn-primary' : 'btn-outline'}`}
-          onClick={() => setFilterStatus('pending_worker3')}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
-        >
-          ⏳ Pending Worker 3 ({pendingCount})
-        </button>
-
-        <div className="search-field" style={{ flex: 1, minWidth: '240px', maxWidth: '380px', marginLeft: 'auto' }}>
-          <Search size={15} />
+        {/* Search Field */}
+        <div className="search-field" style={{ flex: 1, minWidth: '180px', maxWidth: '280px', marginLeft: 'auto', padding: '0.22rem 0.55rem' }}>
+          <Search size={13} />
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search token symbol or contract address..."
+            style={{ fontSize: '0.75rem' }}
           />
         </div>
-
-        <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
-          Showing {filteredMemes.length} of {activePool.length}
-        </span>
       </div>
 
       {/* Memes Table */}
-      <div className="panel" style={{ background: '#ffffff', borderRadius: '8px', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-        {filteredMemes.length === 0 ? (
-          <div style={{ padding: '3rem 1.5rem', textAlign: 'center', color: '#6b7280' }}>
-            <p style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>No memes found</p>
+      <div className="panel" style={{ background: '#ffffff', borderRadius: '6px', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+        {displayedMemes.length === 0 ? (
+          <div style={{ padding: '2.5rem 1.5rem', textAlign: 'center', color: '#6b7280' }}>
+            <p style={{ fontSize: '0.85rem', marginBottom: '0.35rem' }}>No memes found</p>
             {search && (
-              <p style={{ fontSize: '0.82rem', color: '#9ca3af' }}>Try adjusting your search terms</p>
+              <p style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Try adjusting your search terms</p>
             )}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="data-table" style={{ width: '100%', fontSize: '0.84rem' }}>
+            <table className="data-table" style={{ width: '100%', fontSize: '0.78rem' }}>
               <thead>
                 <tr>
                   <th>Token</th>
@@ -297,21 +289,21 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
                 </tr>
               </thead>
               <tbody>
-                {filteredMemes.map(m => {
+                {displayedMemes.map(m => {
                   const address = m.contractAddress || m.ca || '';
                   const volume = m.volume24h ?? m.volume24hUsd ?? null;
                   const chain = getMemeChain(m);
                   return (
                     <tr key={`${chain}:${address || m.symbol}`}>
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <strong style={{ color: '#111827', fontSize: '0.9rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <strong style={{ color: '#111827', fontSize: '0.8125rem' }}>
                             {m.symbol || 'N/A'}
                           </strong>
                           <span
                             style={{
-                              fontSize: '0.65rem',
-                              padding: '1px 5px',
+                              fontSize: '0.625rem',
+                              padding: '1px 4px',
                               borderRadius: '3px',
                               fontWeight: 600,
                               background: chain === 'solana' ? '#f3e8ff' : '#ecfdf5',
@@ -325,7 +317,7 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
                       <td>
                         <span
                           className="mono"
-                          style={{ fontSize: '0.78rem', color: '#6b7280' }}
+                          style={{ fontSize: '0.6875rem', color: '#737373' }}
                           title={address}
                         >
                           {address
@@ -334,22 +326,22 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
                         </span>
                       </td>
                       <td>
-                        <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
+                        <strong style={{ color: '#111827', fontSize: '0.78rem' }}>
                           {m.currentMcap ? fmtCurrency(m.currentMcap) : '—'}
                         </strong>
                       </td>
                       <td>
-                        <strong style={{ color: '#111827', fontSize: '0.88rem' }}>
+                        <strong style={{ color: '#111827', fontSize: '0.78rem' }}>
                           {m.athMcap ? fmtCurrency(m.athMcap) : '—'}
                         </strong>
                         {m.athTimestamp > 0 && (
-                          <div style={{ fontSize: '0.72rem', color: '#6b7280' }}>
+                          <div style={{ fontSize: '0.6875rem', color: '#9ca3af' }}>
                             {formatDaysAgo(m.athTimestamp)}
                           </div>
                         )}
                       </td>
                       <td>
-                        <span style={{ color: '#111827', fontSize: '0.88rem' }}>
+                        <span style={{ color: '#111827', fontSize: '0.78rem' }}>
                           {volume ? fmtCurrency(volume) : '—'}
                         </span>
                       </td>
@@ -359,8 +351,8 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
                           <span
                             key={idx}
                             style={{
-                              fontSize: '0.65rem',
-                              padding: '1px 5px',
+                              fontSize: '0.625rem',
+                              padding: '1px 4px',
                               borderRadius: '3px',
                               background: '#f3f4f6',
                               color: '#4b5563',
@@ -376,10 +368,10 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
                         style={{
                           display: 'inline-flex',
                           alignItems: 'center',
-                          gap: '0.4rem',
-                          fontSize: '0.75rem',
-                          padding: '2px 8px',
-                          borderRadius: '4px',
+                          gap: '0.3rem',
+                          fontSize: '0.6875rem',
+                          padding: '1px 6px',
+                          borderRadius: '3px',
                           fontWeight: 600,
                           background: m.backfilled ? '#dcfce7' : '#fef3c7',
                           color: m.backfilled ? '#166534' : '#92400e',
@@ -395,6 +387,19 @@ export default function MemeRegistryView({ initialMemes = null, initialChain = '
             </table>
           </div>
         )}
+
+        <Pagination
+          currentPage={page}
+          totalPages={totalPages}
+          totalItems={totalFilteredCount}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={sz => {
+            setPageSize(sz);
+            setPage(1);
+          }}
+          pageSizeOptions={[25, 50, 100]}
+        />
       </div>
     </div>
   );

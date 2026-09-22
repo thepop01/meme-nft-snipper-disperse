@@ -30,13 +30,38 @@ let tracked = []; // array of tracked token records
 let dirty = false;
 let saveTimer = null;
 
+/**
+ * Check if a token breaches the $4k market cap floor or the ATH collapse rules:
+ * - Current mcap < $4,000
+ * - Peak mcap >= $50,000 and current mcap < $5,000
+ * - Peak mcap >= $300,000 and current mcap < $10,000
+ */
+export function isMcapEvictable(token) {
+  if (!token) return false;
+  const mcap = token.marketCapUsd;
+  const peakMcap = Math.max(token.peakMarketCapUsd ?? 0, mcap ?? 0);
+  if (mcap != null && Number.isFinite(mcap)) {
+    if (mcap < 4000) return true;
+    if (peakMcap >= 300000 && mcap < 10000) return true;
+    if (peakMcap >= 50000 && mcap < 5000) return true;
+  }
+  return false;
+}
+
 // --- Persistence ---
 function loadTracked() {
   try {
     mkdirSync(DATA_DIR, { recursive: true });
     const raw = readFileSync(TRACKED_FILE, 'utf8');
-    tracked = JSON.parse(raw);
-    log('info', `Loaded ${tracked.length} tracked tokens from disk`);
+    const list = JSON.parse(raw);
+    const beforeCount = list.length;
+    tracked = list.filter(t => {
+      t.peakMarketCapUsd = Math.max(t.peakMarketCapUsd ?? 0, t.marketCapUsd ?? 0);
+      return !isMcapEvictable(t);
+    });
+    const evicted = beforeCount - tracked.length;
+    log('info', `Loaded ${tracked.length} tracked tokens from disk${evicted > 0 ? ` (evicted ${evicted} sub-$4k/collapsed tokens)` : ''}`);
+    if (evicted > 0) scheduleSave();
   } catch { tracked = []; }
 }
 
@@ -67,10 +92,12 @@ export function getTrackedByMint(mint) {
 }
 
 /**
- * Add a token to the tracked list. Returns null if already tracked or at capacity.
+ * Add a token to the tracked list. Returns null if already tracked, at capacity,
+ * or violating the $4k market cap floor / ATH drawdown rules.
  * reason: 'auto'|'manual'|'curated' — explains why it was promoted.
  */
 export function promoteToTracked(token, reason = 'auto') {
+  if (isMcapEvictable(token)) return null;
   if (tracked.find(t => t.mint === token.mint)) return null;
   if (tracked.length >= CAPACITY) {
     // Evict oldest quiet token to make room
@@ -97,6 +124,8 @@ export function promoteToTracked(token, reason = 'auto') {
     // Snapshot of key metrics at promotion
     priceUsd: token.priceUsd ?? null,
     liquidityUsd: token.liquidityUsd ?? null,
+    marketCapUsd: token.marketCapUsd ?? null,
+    peakMarketCapUsd: Math.max(token.peakMarketCapUsd ?? 0, token.marketCapUsd ?? 0),
     tractionScore: token.traction?.tractionScore ?? null,
     // Sleeper wake tracking
     lastWakeAt: null,
@@ -140,6 +169,7 @@ export function evaluatePromotion(token) {
   // Already tracked or discarded? Skip.
   if (tracked.find(t => t.mint === token.mint)) return;
   if (token.state === 'discarded') return;
+  if (isMcapEvictable(token)) return;
 
   // 1. Curated → auto-promote
   if (token.state === 'curated') {
@@ -168,6 +198,19 @@ export function evaluatePromotion(token) {
 export function updateTrackedMarket(mint, patch) {
   const entry = tracked.find(t => t.mint === mint);
   if (!entry) return null;
+
+  // Update market cap and peak ATH
+  if (patch.marketCapUsd != null) {
+    entry.marketCapUsd = patch.marketCapUsd;
+    entry.peakMarketCapUsd = Math.max(entry.peakMarketCapUsd ?? 0, patch.marketCapUsd);
+  }
+
+  // Live market cap floor (< $4k) and ATH drawdown checks
+  if (isMcapEvictable(entry)) {
+    log('info', `TRACKED EVICTED ${entry.symbol || entry.mint.slice(0, 8)}: MCap $${Math.round(entry.marketCapUsd ?? 0)} (floor/drawdown breach)`);
+    untrack(mint);
+    return null;
+  }
 
   // History windows are labeled in 5-min samples ("30m" = 6 samples, "6h" = 72),
   // but the refresh loop ticks every ~45s. Only record a history sample at the
@@ -329,6 +372,9 @@ export function pruneTracked() {
 
   const before = tracked.length;
   tracked = tracked.filter(t => {
+    // 0. Floor & collapse eviction (strict, applies to all including manual)
+    if (isMcapEvictable(t)) return false;
+
     // 1. Absolute expiry (except manuals)
     if (t.promotedAt <= absoluteCutoff && !t.manual) return false;
     
@@ -344,7 +390,7 @@ export function pruneTracked() {
   });
 
   if (tracked.length < before) {
-    log('info', `Pruned ${before - tracked.length} expired/dead tracked tokens`);
+    log('info', `Pruned ${before - tracked.length} expired/dead/sub-floor tracked tokens`);
     scheduleSave();
   }
 }
@@ -357,6 +403,7 @@ setInterval(pruneTracked, 3600_000).unref?.();
  * Manually pin a token to tracked from the UI.
  */
 export function manualTrack(token) {
+  if (isMcapEvictable(token)) return null;
   const existing = tracked.find(t => t.mint === token.mint);
   if (existing) {
     existing.manual = true;

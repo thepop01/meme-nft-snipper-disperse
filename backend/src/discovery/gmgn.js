@@ -4,7 +4,7 @@
 // This adapter only discovers + registers; it never buys (see engine/botManager.js).
 import { execFile } from 'node:child_process';
 import { emit, log } from '../bus.js';
-import { getTokenByKey, getTokenByMint, registerToken } from './registry.js';
+import { getTokenByKey, getTokenByMint, registerToken, applyMarketPatch } from './registry.js';
 
 export const GMGN_CHAINS = {
   solana: { cliChain: 'sol', chainId: null, minLiquidityUsd: 5000 },
@@ -208,7 +208,20 @@ function isKnown(token) {
   return getTokenByKey(`${token.chain}:${token.mint}`) || getTokenByMint(token.mint) || null;
 }
 
+let bannedUntil = Date.now() + 130_000;
+
+function checkRateLimit(error) {
+  const msg = error?.message || '';
+  if (msg.includes('429') || msg.includes('RATE_LIMIT')) {
+    bannedUntil = Date.now() + 130_000;
+    log('warn', `GMGN rate-limit reached. Pausing GMGN requests until ${new Date(bannedUntil).toLocaleTimeString()}`);
+    return true;
+  }
+  return false;
+}
+
 async function pollOnce({ intervals = TRENDING_INTERVALS, trenchTypes = TRENCH_TYPES } = {}) {
+  if (Date.now() < bannedUntil) return;
   if (!process.env.GMGN_API_KEY) {
     if (!missingKeyWarned) {
       missingKeyWarned = true;
@@ -217,36 +230,78 @@ async function pollOnce({ intervals = TRENDING_INTERVALS, trenchTypes = TRENCH_T
     return;
   }
   for (const chain of Object.keys(GMGN_CHAINS)) {
+    if (Date.now() < bannedUntil) break;
     for (const interval of intervals) {
+      if (Date.now() < bannedUntil) break;
       try {
         const items = await fetchTrending(chain, { interval });
         let added = 0;
+        let updated = 0;
         for (const item of items) {
           const token = normalizeGmgnRankItem(item, chain);
-          if (!token || isKnown(token)) continue;
+          if (!token) continue;
+          const existing = isKnown(token);
+          if (existing) {
+            applyMarketPatch(token.mint, {
+              chain: token.chain,
+              priceUsd: token.priceUsd,
+              liquidityUsd: token.liquidityUsd,
+              marketCapUsd: token.marketCapUsd,
+              volume24hUsd: token.volume24hUsd,
+              volume5mUsd: token.volume5mUsd,
+              priceChange: token.priceChange,
+              holderCount: token.holderCount,
+              smartWallets: token.smartWallets,
+              imageUrl: token.imageUrl || existing.imageUrl,
+            });
+            updated++;
+            continue;
+          }
           registerToken(token);
           added++;
         }
-        if (added > 0) log('info', `GMGN ${chain} ${interval}: ${added} new token(s)`);
+        if (added > 0 || updated > 0) log('info', `GMGN ${chain} ${interval}: ${added} new token(s), ${updated} updated`);
       } catch (error) {
-        log('warn', `GMGN ${chain} ${interval} poll failed: ${error.message}`);
+        if (!checkRateLimit(error)) {
+          log('warn', `GMGN ${chain} ${interval} poll failed: ${error.message}`);
+        }
       }
+      await new Promise(r => setTimeout(r, 3500));
     }
+    if (Date.now() < bannedUntil) break;
     try {
       const buckets = await fetchTrenches(chain, { types: trenchTypes });
       let added = 0;
+      let updated = 0;
       for (const trenchType of trenchTypes) {
         for (const item of buckets[trenchType] || []) {
           const token = normalizeTrenchesItem(item, chain, trenchType);
-          if (!token || isKnown(token)) continue;
+          if (!token) continue;
+          const existing = isKnown(token);
+          if (existing) {
+            applyMarketPatch(token.mint, {
+              chain: token.chain,
+              priceUsd: token.priceUsd,
+              liquidityUsd: token.liquidityUsd,
+              marketCapUsd: token.marketCapUsd,
+              volume24hUsd: token.volume24hUsd,
+              priceChange: token.priceChange,
+              imageUrl: token.imageUrl || existing.imageUrl,
+            });
+            updated++;
+            continue;
+          }
           registerToken(token);
           added++;
         }
       }
-      if (added > 0) log('info', `GMGN ${chain} trenches: ${added} new token(s)`);
+      if (added > 0 || updated > 0) log('info', `GMGN ${chain} trenches: ${added} new token(s), ${updated} updated`);
     } catch (error) {
-      log('warn', `GMGN ${chain} trenches poll failed: ${error.message}`);
+      if (!checkRateLimit(error)) {
+        log('warn', `GMGN ${chain} trenches poll failed: ${error.message}`);
+      }
     }
+    await new Promise(r => setTimeout(r, 3500));
   }
 }
 

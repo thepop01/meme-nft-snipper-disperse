@@ -8,10 +8,10 @@ describe('makeExecWallet (dry run)', () => {
     const { makeExecWallet } = await import('../execute.js');
     const execWallet = makeExecWallet();
     const result = await execWallet({
-      job: { drop: { chain: 'base', slug: 'cool-cats', price: '1000' },
+      job: { drop: { chain: 'base', slug: 'cool-cats', price: '1000', saleAdapter: 'opensea-rest' },
         gas: { mode: 'caps', maxFeeGwei: 50, maxPriorityGwei: 2 },
         policy: {} },
-      wallet: { address: '0xA', quantity: 1 },
+      wallet: { address: '0x0000000000000000000000000000000000000001', quantity: 1 },
       privateKey: '0xK',
     });
     expect(result.txHash).toMatch(/^0xDRYRUN/);

@@ -1,4 +1,4 @@
-import { upsertMeme } from './memeRegistry.js';
+import { upsertMeme, getTrackedMemes } from './memeRegistry.js';
 import { executeWithThrottle } from './rateLimiter.js';
 import { log } from '../bus.js';
 
@@ -116,7 +116,10 @@ export async function fetchAthMcapGt4m() {
   return executeWithThrottle('geckoterminal', async () => {
     const res = await fetch(GECKOTERMINAL_TRENDING_URL, {
       signal: AbortSignal.timeout(8_000),
-      headers: { Accept: 'application/json' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
     });
     if (!res.ok) throw new Error(`GeckoTerminal trending error ${res.status}`);
     const data = await res.json();
@@ -212,4 +215,68 @@ export async function runWorker2Pass(customFetcher = fetchAthMcapGt4m) {
     log('warn', `[worker2] ATH mcap pass failed: ${error?.message || String(error)}`);
   }
   return count;
+}
+
+/**
+ * Backfill ATH metrics for tracked tokens that currently lack an ATH or ATH timestamp
+ * (e.g. tokens discovered by Worker 1 based on current market cap >= $2M).
+ */
+export async function backfillPendingMemesAth(maxTokens = 30) {
+  const pending = getTrackedMemes({ backfilled: false })
+    .filter(m => !m.athMcap || !m.athTimestamp || m.athTimestamp === 0);
+
+  if (pending.length === 0) return 0;
+
+  let resolved = 0;
+  const toProcess = pending.slice(0, maxTokens);
+
+  for (const m of toProcess) {
+    try {
+      let pair = null;
+      try {
+        const res = await executeWithThrottle('dexscreener', async () => {
+          const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${m.ca}`, {
+            signal: AbortSignal.timeout(6000),
+            headers: { Accept: 'application/json' },
+          });
+          if (!r.ok) return null;
+          return await r.json();
+        });
+        pair = res?.pairs?.[0];
+      } catch (_) {}
+
+      if (pair) {
+        const pairMcap = firstNumber(pair.marketCap, pair.fdv);
+        const athMcap = Math.max(
+          Number(m.athMcap) || 0,
+          Number(pairMcap) || 0,
+          Number(m.currentMcap) || 0
+        );
+        const athTimestamp = Number(pair.pairCreatedAt) || m.createdAt || Date.now();
+        if (athMcap >= 2_000_000 && athTimestamp > 0) {
+          upsertMeme({
+            ca: m.ca,
+            chain: m.chain,
+            athMcap,
+            athTimestamp,
+            poolAddress: pair.pairAddress || m.poolAddress,
+          });
+          resolved++;
+          continue;
+        }
+      }
+
+      const baselineMcap = Math.max(Number(m.athMcap) || 0, Number(m.currentMcap) || 0);
+      if (baselineMcap >= 2_000_000) {
+        upsertMeme({
+          ca: m.ca,
+          chain: m.chain,
+          athMcap: baselineMcap,
+          athTimestamp: m.createdAt || Date.now(),
+        });
+        resolved++;
+      }
+    } catch (_) {}
+  }
+  return resolved;
 }

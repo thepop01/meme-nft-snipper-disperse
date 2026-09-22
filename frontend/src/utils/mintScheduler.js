@@ -214,39 +214,11 @@ export async function executeMint(mintId) {
 
     for (const walletAddress of validWallets) {
       try {
-        const provider = new ethers.JsonRpcProvider(rpcUrl, chainId);
-        const wallet = new ethers.Wallet(privateKey, provider);
-
-        const txData = await buildMintTransaction(mint.slug, walletAddress, mint.quantity);
-
-        const tx = await wallet.sendTransaction({
-          to: txData.to,
-          data: txData.data,
-          value: BigInt(txData.value),
-        });
-
-        // Re-load mints fresh before each write to avoid stale snapshots
-        mints = loadMints();
-        const freshMint = mints.find(m => m.id === mintId);
-        if (!freshMint || freshMint.status === 'cancelled') break;
-
-        freshMint.txHashes.push({ wallet: walletAddress, hash: tx.hash, chain: mint.chain });
-        saveMints(mints);
-        addLog({
-          type: 'mint',
-          collection: mint.collectionName,
-          slug: mint.slug,
-          wallet: walletAddress,
-          txHash: tx.hash,
-          chain: mint.chain,
-          status: 'pending',
-        });
-
-        const receipt = await tx.wait();
-        addLog({
-          type: 'mint_confirmed',
-          collection: mint.collectionName,
-          slug: mint.slug,
+        // Direct browser-side transaction signing and broadcasting is deprecated and disabled for safety.
+        // All mint scheduling and execution must be routed through the backend NFT engine with proper simulation,
+        // gas caps, and reviewed OpenSea REST sale adapters.
+        throw new Error('Direct browser minting has been disabled for safety. Please schedule mints via the backend NFT Mint Bot engine.');
+      } catch (err) {
           wallet: walletAddress,
           txHash: tx.hash,
           chain: mint.chain,

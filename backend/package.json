@@ -7,6 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "find-wallets": "node scripts/find-smart-wallets.js",
+    "sync-wallets": "node scripts/sync-wallets-to-db.js",
+    "crawl-wallets": "node scripts/bulk-crawl-wallets.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

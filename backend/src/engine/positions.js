@@ -129,7 +129,7 @@ export async function openPosition(token, buyResult, exitRules, botId = null) {
   return position;
 }
 
-export async function closePosition(positionId, fraction = 1, reason = 'manual', confirmedResult = null) {
+export async function closePosition(positionId, fraction = 1, reason = 'manual', confirmedResult = null, options = {}) {
   if (selling.has(positionId)) throw new Error('Sell already in progress for this position');
   const position = positions.find(p => p.id === positionId && p.status === 'open');
   if (!position) throw new Error('Position not found or already closed');
@@ -141,7 +141,13 @@ export async function closePosition(positionId, fraction = 1, reason = 'manual',
   selling.add(positionId);
   try {
     const slippagePct = position.exitRules?.slippagePct ?? 10;
-    const result = confirmedResult || await executeSell(position, { fraction, slippagePct });
+    // Keep retries for the same position snapshot on one durable submission
+    // intent. Once a partial sell changes tokenAmount, the next intentional
+    // sell gets a new key; an ambiguous send cannot be rebroadcast meanwhile.
+    const sellIntentKey = options.idempotencyKey || `position:${position.id}:sell:${fraction}:${position.tokenAmount}`;
+    const result = confirmedResult || await executeSell(position, {
+      fraction, slippagePct, idempotencyKey: sellIntentKey,
+    });
 
     const soldTokens = Number(result.soldTokens || position.tokenAmount * fraction);
     ensureLegacyLot(position);

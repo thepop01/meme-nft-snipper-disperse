@@ -2,7 +2,7 @@
 import WebSocket from 'ws';
 import { log } from '../bus.js';
 import { registerToken, setTokenImage } from './registry.js';
-import { resolveImageUrl } from './tokenMedia.js';
+import { resolveImageUrl, isMetadataUri } from './tokenMedia.js';
 import { assetKey, eventId, EVENT_TYPES, validateEnvelope } from '../tape/identity.js';
 import { systemClock } from './clock.js';
 
@@ -133,11 +133,20 @@ export async function routePumpMessage(ctx, message) {
 
 function registerCreation(message, clock) {
   if (message.txType !== 'create' || !message.mint) return;
+  const solPriceUsd = 135;
+  const marketCapUsd = message.marketCapSol ? Math.round(Number(message.marketCapSol) * solPriceUsd) : 4500;
+  const supply = message.rawSupply ? (Number(message.rawSupply) / 1e6) : 1_000_000_000;
+  const initialPriceUsd = marketCapUsd / (supply || 1_000_000_000);
+  const initialLiquidityUsd = Math.round(30 * solPriceUsd);
+
   registerToken({
     mint: message.mint, symbol: message.symbol || '?', name: message.name || 'Unknown',
-    imageUrl: message.uri || null, source: 'pumpfun', creator: message.traderPublicKey || null,
+    imageUrl: isMetadataUri(message.uri) ? null : (message.uri || null), source: 'pumpfun', creator: message.traderPublicKey || null,
     createdAt: message.blockTime == null ? clock.now() : Number(message.blockTime) * 1000,
     marketCapSol: message.marketCapSol || null, initialBuySol: message.solAmount || null,
+    marketCapUsd,
+    priceUsd: initialPriceUsd,
+    liquidityUsd: initialLiquidityUsd,
     curveTargetSol: message.curveTargetSol ?? null, rawSupply: message.rawSupply ?? null,
     decimals: message.decimals ?? null, onCurve: true,
     bondingCurveKey: message.bondingCurveKey ?? null, chain: 'solana', launchpad: 'pumpfun',
@@ -184,10 +193,12 @@ export function startPumpFeed(tape, deps) {
       if (!type) return;
       stats.received(type);
       if (message.blockTime != null) stats.lag(clock.now() - Number(message.blockTime) * 1000);
+      if (message.txType === 'create') {
+        try { registerCreation(message, clock); } catch (regErr) { log('warn', `registerCreation error: ${regErr.message}`); }
+      }
       try {
         const result = await routePumpMessage({ tape, baseline, subs, budget, structuralEvidence, structuralState, clock }, message);
         if (result.appended === false && !result.invalid && !result.ignored) stats.duplicate();
-        registerCreation(message, clock);
       } catch (error) {
         log('warn', `PumpPortal ingestion failed: ${error.message}`);
       }

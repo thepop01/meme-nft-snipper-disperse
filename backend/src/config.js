@@ -1,8 +1,14 @@
 import 'dotenv/config';
+import { securityConfigFromEnv } from './security.js';
+
+const security = securityConfigFromEnv(process.env);
 
 export const config = {
   port: Number(process.env.PORT) || 4517,
-  apiToken: process.env.API_TOKEN || '',
+  host: security.host,
+  apiToken: security.apiToken,
+  allowUnauthenticated: security.allowUnauthenticated,
+  corsOrigins: security.corsOrigins,
   databaseUrl: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/tradeforge',
   rpcUrl: process.env.RPC_URL || 'https://api.mainnet-beta.solana.com',
   wssUrl: process.env.WSS_URL || 'wss://api.mainnet-beta.solana.com',

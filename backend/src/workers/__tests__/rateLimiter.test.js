@@ -57,7 +57,7 @@ describe('rateLimiter & Cloudflare Circuit Breaker', () => {
     expect(health.geckoterminal.status).toBe('degraded');
     expect(health.geckoterminal.consecutiveErrors).toBe(1);
     expect(health.geckoterminal.failureCount).toBe(1);
-    expect(health.geckoterminal.currentDelayMs).toBe(3000); // 1500 * 2
+    expect(health.geckoterminal.currentDelayMs).toBe(5000); // 2500 * 2
   });
 
   it('backs off delay on 429 and enters cooling_down on consecutive errors', async () => {

@@ -171,7 +171,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
     <aside className="umi-sidebar">
       {/* Brand Header */}
       <div className="umi-brand" onClick={() => navigate('/dashboard')}>
-        <UmiLogo size={26} />
+        <UmiLogo size={22} />
         <span className="umi-brand-title">TradeForge</span>
       </div>
 
@@ -183,7 +183,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/mintbot"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <LeafNavIcon size={17} />
+          <LeafNavIcon size={15} />
           <span>Mints</span>
         </NavLink>
 
@@ -191,7 +191,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/wallets"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Wallet size={17} />
+          <Wallet size={15} />
           <span>Wallets</span>
           <span className="umi-badge">{walletCount}</span>
         </NavLink>
@@ -200,7 +200,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/disperse"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <DisperseNavIcon size={17} />
+          <DisperseNavIcon size={15} />
           <span>Disperse</span>
         </NavLink>
       </div>
@@ -209,43 +209,47 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
       <div className="umi-nav-card">
         <div className="umi-card-header-label">Meme &amp; Sniper</div>
 
-        <NavLink 
-          to="/sol-meme" 
-          className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
-        >
-          <Radar size={17} />
-          <span>Solana Meme</span>
-        </NavLink>
-
-        <NavLink 
-          to="/evm-meme" 
-          className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
-        >
-          <Radar size={17} />
-          <span>EVM Meme</span>
-        </NavLink>
-
         <NavLink
           to="/smart-wallets"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Wallet size={17} />
-          <span>Wallets</span>
+          <Wallet size={15} />
+          <span>Tracked Wallets</span>
+          <span className="umi-badge" style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', fontWeight: 600 }}>Focus</span>
         </NavLink>
 
         <NavLink
           to="/tracked-memes"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Radar size={17} />
+          <Radar size={15} />
           <span>Tracked Memes</span>
+          <span className="umi-badge" style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', color: '#818cf8', fontWeight: 600 }}>Focus</span>
+        </NavLink>
+
+        <NavLink 
+          to="/sol-meme" 
+          className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
+        >
+          <Radar size={15} />
+          <span>Solana Meme</span>
+          <span className="umi-badge" style={{ opacity: 0.6, fontSize: '0.625rem' }}>Paused</span>
+        </NavLink>
+
+        <NavLink 
+          to="/evm-meme" 
+          className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
+        >
+          <Radar size={15} />
+          <span>EVM Meme</span>
+          <span className="umi-badge" style={{ opacity: 0.6, fontSize: '0.625rem' }}>Paused</span>
         </NavLink>
 
         <NavLink
           to="/sniper"
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Crosshair size={17} />
+          <Crosshair size={15} />
           <span>Sniper</span>
         </NavLink>
 
@@ -253,7 +257,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/bots" 
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Bot size={17} />
+          <Bot size={15} />
           <span>My Bots</span>
         </NavLink>
       </div>
@@ -266,7 +270,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/dashboard" 
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <LayoutDashboard size={17} />
+          <LayoutDashboard size={15} />
           <span>Dashboard</span>
         </NavLink>
 
@@ -274,7 +278,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
           to="/activity" 
           className={({ isActive }) => `umi-nav-link ${isActive ? 'active' : ''}`}
         >
-          <Activity size={17} />
+          <Activity size={15} />
           <span>Activity</span>
         </NavLink>
       </div>
@@ -283,7 +287,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
       <div className="umi-nav-card umi-profile-bottom-card">
         <div className="umi-profile-row">
           <div className="umi-avatar">
-            {account ? (displayName[0]?.toUpperCase() || 'W') : <Wallet size={16} />}
+            {account ? (displayName[0]?.toUpperCase() || 'W') : <Wallet size={14} />}
           </div>
           <div className="umi-profile-details">
             <span className="umi-profile-name">{displayName}</span>
@@ -296,7 +300,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
               onClick={disconnectWallet}
               title="Disconnect"
             >
-              <LogOut size={15} />
+              <LogOut size={13} />
             </button>
           ) : (
             <button
@@ -308,7 +312,7 @@ const Sidebar = ({ account, setAccount, walletCount = 0 }) => {
               }}
               title="Connect Wallet"
             >
-              <Zap size={15} />
+              <Zap size={13} />
             </button>
           )}
         </div>

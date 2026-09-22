@@ -4,13 +4,12 @@
 
 Automatically discover live and upcoming NFT mints from the selected OpenSea source across its supported chains, allow users to choose eligible drops and wallets, then execute mint jobs reliably at the configured time.
 
-## Current State
+## Current State & Execution Hardening
 
-- The product calls only OpenSea's drops API, initially loading ten upcoming drops.
-- Discovery is not a broad live-and-upcoming marketplace/launchpad index.
-- Scheduling runs in browser timers and stops when the tab/browser is closed.
-- The browser decrypts a private key from local storage for mint execution.
-- The generic `isWhitelisted(address)` test is not a reliable allowlist check for arbitrary mint contracts.
+- The product discovers live and upcoming drops via OpenSea's drops API across supported chains (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche C-Chain, and Zora).
+- Browser-side scheduled minting and client-side private key decryption have been deprecated and disabled for safety.
+- All automated and scheduled mint execution is orchestrated through the backend NFT engine with pre-simulation (`provider.call`), native value caps, and gas caps.
+- Transactions are strictly verified against reviewed sale adapters (`opensea-rest`). Unreviewed or custom sale standards are categorized as `manual-only` or `discover-only` and rejected from automated execution.
 
 ## Support Model
 

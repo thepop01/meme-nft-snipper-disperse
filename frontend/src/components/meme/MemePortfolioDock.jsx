@@ -44,20 +44,32 @@ function LimitSellModal({ position, onClose, onPlaced }) {
   );
 }
 
-export default function MemePortfolioDock({ positions, orders, trades, fills = [], pnl, loading, onRefresh, tags = [], selectedTagIds = [], onTagChange }) {
+export default function MemePortfolioDock({
+  positions, orders, trades, fills = [], pnl, loading, onRefresh,
+  wallets = [], selectedWalletAddress = '', onWalletChange,
+  tags = [], selectedTagIds = [], onTagChange,
+}) {
   const toast = useToast();
   const [tab, setTab] = useState('positions');
   const [limitSell, setLimitSell] = useState(null);
   const [selling, setSelling] = useState({});
-  const open = positions.filter(position => position.status === 'open').sort((a, b) => b.openedAt - a.openedAt);
-  const openOrders = orders.filter(order => order.status === 'open');
-  const displayOrders = [...orders].sort((a, b) => b.createdAt - a.createdAt);
+
+  const filteredPositions = selectedWalletAddress
+    ? positions.filter(position => String(position.walletAddress || '').toLowerCase() === selectedWalletAddress.toLowerCase())
+    : positions;
+  const open = filteredPositions.filter(position => position.status === 'open').sort((a, b) => b.openedAt - a.openedAt);
+  const openOrders = orders.filter(order => order.status === 'open' && (!selectedWalletAddress || String(order.walletAddress || '').toLowerCase() === selectedWalletAddress.toLowerCase()));
+  const displayOrders = (selectedWalletAddress
+    ? orders.filter(order => String(order.walletAddress || '').toLowerCase() === selectedWalletAddress.toLowerCase())
+    : orders).sort((a, b) => b.createdAt - a.createdAt);
   const unrealized = open.reduce((sum, position) => sum + (position.pnlSol || 0), 0);
   const realized = pnl?.realizedPnlSol ?? trades.filter(trade => trade.side === 'sell').reduce((sum, trade) => sum + (trade.pnlSol || 0), 0);
   const invested = open.reduce((sum, position) => sum + (position.solSpent || 0), 0);
   const wins = fills.length ? fills.filter(fill => fill.side === 'sell') : trades.filter(trade => trade.side === 'sell');
   const winRate = pnl?.winRate != null ? pnl.winRate * 100 : (wins.length ? wins.filter(trade => ((trade.realizedPnlSol ?? trade.pnlSol) || 0) > 0).length / wins.length * 100 : null);
-  const history = fills.length ? fills : trades;
+  const history = (selectedWalletAddress
+    ? (fills.length ? fills : trades).filter(t => String(t.walletAddress || '').toLowerCase() === selectedWalletAddress.toLowerCase())
+    : (fills.length ? fills : trades));
 
   const quickSell = async (position, fraction) => {
     setSelling(current => ({ ...current, [position.id]: true }));
@@ -76,7 +88,25 @@ export default function MemePortfolioDock({ positions, orders, trades, fills = [
 
   return (
     <section className="portfolio-dock">
-      {tags.length > 0 && <div className="portfolio-filter-bar"><span>Portfolio wallet tags</span><WalletTagSelector tags={tags} selectedIds={selectedTagIds} onChange={onTagChange} label="Filter positions, fills and PnL" />{selectedTagIds.length > 0 && <button className="btn-outline btn-xs" type="button" onClick={() => onTagChange([])}>Clear</button>}</div>}
+      <div className="portfolio-filter-bar">
+        <span style={{ fontSize: '0.8rem', color: '#4b5563', fontWeight: 600 }}>Wallet:</span>
+        <select
+          className="select-field"
+          style={{ minWidth: '220px', height: '30px', fontSize: '0.8rem', padding: '2px 8px' }}
+          value={selectedWalletAddress}
+          onChange={e => onWalletChange?.(e.target.value)}
+        >
+          <option value="">All Wallets ({wallets.length})</option>
+          {wallets.map(w => (
+            <option key={w.id || w.address} value={w.address}>
+              {w.name ? `${w.name} (${w.address.slice(0, 6)}…${w.address.slice(-4)})` : `${w.address.slice(0, 8)}…${w.address.slice(-6)}`}
+            </option>
+          ))}
+        </select>
+        {selectedWalletAddress && (
+          <button className="btn-outline btn-xs" type="button" onClick={() => onWalletChange?.('')}>Clear</button>
+        )}
+      </div>
       <div className="portfolio-summary">
         <div><span className="summary-label">Open positions</span><strong>{open.length}</strong></div>
         <div><span className="summary-label">Unrealized PnL</span><strong><PnlValue value={unrealized} /></strong></div>

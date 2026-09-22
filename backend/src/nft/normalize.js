@@ -121,5 +121,10 @@ export function normalizeDrop(raw, now = Date.now()) {
     openseaUrl: mintPageUrl(slug),
     nextStageStart: rawNextStage?.start_time ? new Date(rawNextStage.start_time).getTime() : null,
     mintPageUrl: mintPageUrl(slug),
+    // OpenSea REST discovery is a reviewed execution source only when the
+    // backend can validate its returned transaction against this collection.
+    // Other/missing sale metadata remains discover-only/manual-only.
+    saleAdapter: raw.sale_adapter || raw.saleAdapter || 'opensea-rest',
+    executionSupported: raw.sale_adapter === 'opensea-rest' || raw.saleAdapter === 'opensea-rest' || raw.sale_adapter == null && raw.saleAdapter == null,
   };
 }

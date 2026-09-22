@@ -300,14 +300,11 @@ const BotsView = () => {
 
   return (
     <div className="solana-container">
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-        <div>
-          <h2>My Bots</h2>
-          <p>Custom sniper agents — each with its own entry filters and exit strategy</p>
-        </div>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+        <h2 style={{ margin: 0 }}>My Bots</h2>
         {backend && (
-          <button className="btn-primary" onClick={() => setEditing('new')}>
-            <Plus size={16} /> New Bot
+          <button className="btn-primary btn-xs" onClick={() => setEditing('new')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.25rem 0.6rem' }}>
+            <Plus size={14} /> New Bot
           </button>
         )}
       </div>

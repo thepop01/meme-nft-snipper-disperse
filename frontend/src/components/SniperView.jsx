@@ -195,9 +195,8 @@ const SniperView = () => {
 
   return (
     <div className="solana-container">
-      <div className="page-header">
-        <h2>Sniper</h2>
-        <p>Open positions with live PnL, automatic exits, and trade history</p>
+      <div className="page-header" style={{ marginBottom: '0.65rem' }}>
+        <h2 style={{ margin: 0 }}>Sniper</h2>
       </div>
 
       {backend === null && (

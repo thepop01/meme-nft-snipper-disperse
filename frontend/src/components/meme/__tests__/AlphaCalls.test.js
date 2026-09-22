@@ -16,4 +16,12 @@ describe('pickAlphaCalls', () => {
     const calls = pickAlphaCalls([mk('A', 10), mk('B', 90), mk('C', 50)], 2);
     expect(calls.map(c => c.mint)).toEqual(['B', 'C']);
   });
+
+  it('prioritizes early runner breakout calls', () => {
+    const calls = pickAlphaCalls([
+      { mint: 'A', state: 'curated', traction: { tractionScore: 80 } },
+      { mint: 'B', state: 'curated', earlySignal: { isEarlySignal: true }, traction: { tractionScore: 50 } },
+    ]);
+    expect(calls[0].mint).toBe('B');
+  });
 });

@@ -364,4 +364,28 @@ describe('MemeRegistryView', () => {
     expect(html).toMatch(/ROBINTOKEN/);
     expect(html).not.toMatch(/SOLTOKEN/);
   });
+
+  it('renders Pagination component with item counts and page size selector', () => {
+    const mockMemes = Array.from({ length: 75 }, (_, i) => ({
+      chain: 'solana',
+      contractAddress: `MintAddressTest${i}`,
+      symbol: `TOKEN${i}`,
+      currentMcap: 2000000 + i * 1000,
+      athMcap: 4000000 + i * 1000,
+      volume24h: 500000,
+      sourceFlags: ['gmgn'],
+      backfilled: i % 2 === 0,
+    }));
+
+    const html = renderToString(
+      <MemoryRouter>
+        <MemeRegistryView initialMemes={mockMemes} />
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/Showing.*1.*50.*of.*75/);
+    expect(html).toContain('Previous');
+    expect(html).toContain('Next');
+    expect(html).toMatch(/50.*\/ page/);
+  });
 });

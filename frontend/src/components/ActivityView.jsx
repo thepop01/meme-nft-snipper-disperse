@@ -42,9 +42,9 @@ export default function ActivityView() {
   const filtered = useMemo(() => events.filter(event => !type || event.type === type), [events, type]);
 
   return <div className="activity-container">
-    <div className="page-header page-header-row">
-      <div><span className="page-eyebrow">Operations & audit</span><h2>Activity</h2><p>One timeline for wallet changes, trades, mint jobs, Disperse jobs, alerts, and backend events.</p></div>
-      <button className="btn-outline" type="button" onClick={() => refresh(true)} disabled={loading}><RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh health</button>
+    <div className="page-header page-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+      <h2 style={{ margin: 0 }}>Activity</h2>
+      <button className="btn-outline btn-xs" type="button" onClick={() => refresh(true)} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.25rem 0.6rem' }}><RefreshCw size={13} className={loading ? 'spin' : ''} /> Refresh health</button>
     </div>
     {error && <div className="conn-banner offline"><ShieldAlert size={15} /><span>{error}</span></div>}
 

@@ -6,6 +6,7 @@ vi.mock('../../alerts.js', () => ({ pushAlert: vi.fn() }));
 const registryTokens = new Map();
 vi.mock('../registry.js', () => ({
   getCuratedTokens: () => [...registryTokens.values()].filter(t => t.state === 'curated'),
+  getTokens: () => [...registryTokens.values()],
   getTokenByMint: (m) => registryTokens.get(m) || null,
   getTokenByKey: (k) => registryTokens.get(k) || null,
   applyMarketPatch: vi.fn((mint, patch) => {

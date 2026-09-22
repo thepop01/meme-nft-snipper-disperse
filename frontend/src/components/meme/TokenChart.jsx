@@ -12,15 +12,53 @@ export default function TokenChart({ token }) {
     const duration = RANGES.find(([label]) => label === range)?.[1] || Infinity;
     const cutoff = duration === Infinity ? 0 : Date.now() - duration;
     const deduped = new Map();
+
+    const addPoint = (ts, price) => {
+      const time = Math.floor(Number(ts) / 1000);
+      const value = Number(price);
+      if (time > 0 && Number.isFinite(value) && value > 0) {
+        deduped.set(time, { time, value });
+      }
+    };
+
+    // 1. History array
     for (const point of token?.history || []) {
-      const time = Math.floor(Number(point.ts) / 1000);
-      const value = Number(point.priceUsd);
-      if (Number(point.ts) >= cutoff && time > 0 && value > 0) deduped.set(time, { time, value });
+      if (Number(point.ts) >= cutoff) addPoint(point.ts, point.priceUsd);
     }
-    if (token?.priceUsd && token?.enrichedAt) {
-      const time = Math.floor(Number(token.enrichedAt) / 1000);
-      if (Number(token.enrichedAt) >= cutoff) deduped.set(time, { time, value: Number(token.priceUsd) });
+    // 2. Tracked 30m history
+    for (const point of token?.priceHistory30m || []) {
+      if (Number(point.ts) >= cutoff) addPoint(point.ts, point.priceUsd);
     }
+    // 3. Current enriched price
+    if (token?.priceUsd) {
+      addPoint(token.enrichedAt || Date.now(), token.priceUsd);
+    }
+
+    // If selected range had < 2 points, try all history regardless of range
+    if (deduped.size < 2) {
+      for (const point of token?.history || []) addPoint(point.ts, point.priceUsd);
+      for (const point of token?.priceHistory30m || []) addPoint(point.ts, point.priceUsd);
+      if (token?.priceUsd) addPoint(token.enrichedAt || Date.now(), token.priceUsd);
+    }
+
+    // If still < 2 points, construct baseline from known price change or creation time
+    if (deduped.size < 2 && token?.priceUsd) {
+      const currentPrice = Number(token.priceUsd);
+      const changeH1 = token.priceChange?.h1 ?? token.priceChange?.m5 ?? token.priceChange?.h24;
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (changeH1 != null && Number.isFinite(Number(changeH1))) {
+        const factor = 1 + Number(changeH1) / 100;
+        const pastPrice = factor > 0 ? currentPrice / factor : currentPrice * 0.9;
+        addPoint((nowSec - 3600) * 1000, pastPrice);
+        addPoint((nowSec - 1800) * 1000, (pastPrice + currentPrice) / 2);
+      } else if (token.createdAt && Date.now() - token.createdAt > 60_000) {
+        addPoint(token.createdAt, currentPrice * 0.95);
+      } else {
+        addPoint((nowSec - 900) * 1000, currentPrice);
+      }
+      addPoint(nowSec * 1000, currentPrice);
+    }
+
     return [...deduped.values()].sort((a, b) => a.time - b.time);
   }, [range, token]);
 

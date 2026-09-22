@@ -6,6 +6,7 @@ import { getToken } from '../discovery/registry.js';
 import { getPositions, openPosition, closePosition } from '../engine/positions.js';
 import { getSolPriceUsd } from './executor.js';
 import { log } from '../bus.js';
+import { assertTokenBuyable } from '../analysis/safety.js';
 
 const WSOL = 'So11111111111111111111111111111111111111112';
 const STORE = 'trade-intents';
@@ -102,6 +103,7 @@ export async function prepareExternalTrade(input) {
   if (side === 'buy') {
     token = getToken(input.mint);
     if (!token) throw new Error('Token is no longer available in the registry');
+    assertTokenBuyable(token);
     const solAmount = Number(input.solAmount);
     if (!(solAmount > 0)) throw new Error('solAmount must be positive');
     if (solAmount > config.maxTradeSol) throw new Error(`Trade exceeds the ${config.maxTradeSol} SOL live limit`);

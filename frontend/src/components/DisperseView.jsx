@@ -6,8 +6,6 @@ import {
 } from 'lucide-react';
 import { disperseApi } from '../utils/disperseApi.js';
 import { subscribeWs } from '../utils/sniperApi.js';
-import { walletApi } from '../utils/walletApi.js';
-import { UmiBanner } from './ui/UmiBanner';
 import { ChainBar, EthGlyphSmall } from './ui/ChainBar';
 import { disperseChainFor, chainLabelFor, DISPERSE_SUPPORTED_LABELS } from '../utils/chainCatalog.js';
 import { useToast } from './ui/useToast';
@@ -172,9 +170,6 @@ const DisperseView = ({ account, walletDirectory = { wallets: [], tags: [] } }) 
 
   return (
     <div className="umi-page-container">
-      {/* Purple Top Banner */}
-      <UmiBanner />
-
       {/* Main Card Container */}
       <div className="umi-card-container umi-disperse-card">
         {/* Chain Bar */}

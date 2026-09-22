@@ -9,14 +9,25 @@
 // every pass appends to token.history so traction can be measured over time.
 import { emit, log } from '../bus.js';
 import { enrichToken } from './enrich.js';
-import { analyzeToken } from '../analysis/safety.js';
+import {
+  analyzeToken,
+  safetyAdmission,
+  assertTokenBuyable,
+} from '../analysis/safety.js';
 import { computeTraction } from '../analysis/traction.js';
+import { evaluateEarlyCaller } from '../analysis/earlyCaller.js';
 import { evaluateToken as evaluateCustomLists } from '../analysis/customLists.js';
-import { evaluatePromotion, getTrackedByMint } from '../analysis/tracked.js';
+import { evaluatePromotion, getTrackedByMint, untrack } from '../analysis/tracked.js';
 import { load, save } from '../store.js';
+import { upsertMemeTokensDb } from './db.js';
 
-const MAX_TOKENS = 300;
+export const MAX_TOKENS = Number(process.env.MAX_TOKENS || 100000); // at least 100k meme capacity
 const tokens = new Map(); // key -> token record
+let tokenDb = null;
+
+export function setTokenDb(db) {
+  tokenDb = db;
+}
 
 /**
  * Generate a unique key for a token. Solana uses mint directly,
@@ -27,36 +38,69 @@ function tokenKey(mint, chain) {
   return mint;
 }
 
-// --- Persistence (atomic writes + corrupt-file quarantine via store.js) ---
+// --- Persistence (atomic writes + corrupt-file quarantine via store.js + PostgreSQL) ---
 let dirty = false;
 let saveTimer = null;
 
 function loadTokens() {
   const arr = load('tokens', []);
+  let evictedCurated = 0;
   for (const t of arr) {
     // Re-key with the chain-aware key so EVM tokens don't reload under a
     // plain mint and get re-registered as a duplicate by the live feed.
     const key = t.key || tokenKey(t.mint, t.chain);
-    tokens.set(key, { ...t, key, admission: t.admission ?? (t.state === 'curated' ? 'qualified' : t.state === 'discarded' ? 'rejected' : 'watching') });
+    const peakMarketCapUsd = Math.max(t.peakMarketCapUsd ?? 0, t.marketCapUsd ?? 0);
+    const record = {
+      ...t,
+      key,
+      peakMarketCapUsd,
+      admission: t.admission ?? (t.state === 'curated' ? 'qualified' : t.state === 'discarded' ? 'rejected' : 'watching'),
+    };
+    if (record.state === 'curated') {
+      const mcap = record.marketCapUsd;
+      const peakMcap = record.peakMarketCapUsd ?? mcap ?? 0;
+      if (mcap != null && Number.isFinite(mcap)) {
+        if (mcap < 4000 || (peakMcap >= 300000 && mcap < 10000) || (peakMcap >= 50000 && mcap < 5000)) {
+          record.state = 'discarded';
+          record.admission = 'rejected';
+          record.discardReason = mcap < 4000
+            ? `market cap $${Math.round(mcap)} below $4k floor`
+            : peakMcap >= 300000
+            ? `market cap $${Math.round(mcap)} collapsed below $10k after peak $${Math.round(peakMcap)}`
+            : `market cap $${Math.round(mcap)} collapsed below $5k after peak $${Math.round(peakMcap)}`;
+          evictedCurated++;
+        }
+      }
+    }
+    tokens.set(key, record);
   }
-  if (tokens.size > 0) log('info', `Loaded ${tokens.size} tokens from disk`);
+  if (tokens.size > 0) log('info', `Loaded ${tokens.size} tokens from disk${evictedCurated > 0 ? ` (evicted ${evictedCurated} sub-floor/collapsed curated tokens)` : ''}`);
 }
 
 function scheduleSave() {
   if (dirty) return;
   dirty = true;
-  saveTimer = setTimeout(() => {
+  saveTimer = setTimeout(async () => {
     dirty = false;
+    const all = [...tokens.values()];
     try {
-      save('tokens', [...tokens.values()]);
+      save('tokens', all.slice(-10000)); // persist latest 10k to disk JSON
     } catch (err) {
       log('warn', `Failed to persist tokens: ${err.message}`);
+    }
+    if (tokenDb) {
+      try {
+        await upsertMemeTokensDb(tokenDb, all.slice(-500)); // sync latest 500 into Postgres
+      } catch (err) {
+        log('warn', `Failed to sync tokens to Postgres: ${err.message}`);
+      }
     }
   }, 5_000);
 }
 
 // Load on import
 loadTokens();
+
 
 // Re-analysis passes, in minutes after discovery. Pass 0 runs immediately.
 // Extended schedule catches "sleeper" tokens that sleep for hours then pump.
@@ -93,18 +137,23 @@ export function registerToken(partial) {
     passes: 0,
     nextPassAt: Date.now(),  // pass 0 due immediately
     passBaseAt: Date.now(),  // anchor for pass scheduling (reset on dormant wake)
-    history: [],             // [{ts, priceUsd, liquidityUsd, marketCapUsd}]
-    peakLiquidityUsd: null,
+    history: (partial.priceUsd != null)
+      ? [{ ts: Date.now(), priceUsd: partial.priceUsd, liquidityUsd: partial.liquidityUsd ?? 0, marketCapUsd: partial.marketCapUsd ?? 0 }]
+      : [],
+    peakLiquidityUsd: partial.liquidityUsd ?? null,
     discardReason: null,
     curatedAt: null,
-    priceUsd: null,
-    liquidityUsd: null,
-    volume24hUsd: null,
-    marketCapUsd: null,
+    priceUsd: partial.priceUsd ?? null,
+    liquidityUsd: partial.liquidityUsd ?? null,
+    volume24hUsd: partial.volume24hUsd ?? null,
+    marketCapUsd: partial.marketCapUsd ?? null,
     socials: {},
     safety: null,            // { score, checks }
     traction: null,          // { tractionScore, signals, ... }
     enrichedAt: null,
+    enrichmentStatus: 'unknown', // fresh | stale | unknown; never reuse failed values
+    enrichmentError: null,
+    enrichmentFailedAt: null,
     analyzedAt: null,
   };
 
@@ -136,15 +185,35 @@ async function pumpAnalysisQueue() {
 }
 
 async function runPass(token) {
+  const enrichmentStartedAt = Date.now();
   try {
     await enrichToken(token);
+    // enrichToken may return successfully with no pair. That is a completed
+    // observation, but only values written by this pass may be considered fresh.
+    token.enrichmentStatus = 'fresh';
+    token.enrichmentError = null;
+    token.enrichmentFailedAt = null;
+    token.enrichedAt = token.enrichedAt || enrichmentStartedAt;
   } catch (err) {
+    // Never retain old market values as fresh after a failed provider call.
+    token.enrichmentStatus = 'stale';
+    token.enrichmentStale = true;
+    token.enrichmentError = err.message;
+    token.enrichmentFailedAt = Date.now();
+    token.enrichedAt = null;
     log('warn', `enrich failed for ${token.mint}: ${err.message}`);
   }
   try {
     token.safety = await analyzeToken(token);
     token.analyzedAt = Date.now();
   } catch (err) {
+    token.safety = {
+      score: null,
+      checks: [],
+      tokenProgram: null,
+      checkCompleteness: { required: [], missing: [], unknown: ['analysis'], failed: [], complete: false, safe: false },
+    };
+    token.analyzedAt = null;
     log('warn', `safety analysis failed for ${token.mint}: ${err.message}`);
   }
 
@@ -158,6 +227,9 @@ async function runPass(token) {
   if (token.history.length > 20) token.history.shift();
   if (token.liquidityUsd != null) {
     token.peakLiquidityUsd = Math.max(token.peakLiquidityUsd ?? 0, token.liquidityUsd);
+  }
+  if (token.marketCapUsd != null) {
+    token.peakMarketCapUsd = Math.max(token.peakMarketCapUsd ?? 0, token.marketCapUsd);
   }
 
   token.traction = computeTraction(token);
@@ -186,13 +258,51 @@ function evaluateLifecycle(token) {
     return discard(token, `clone of established token ${token.symbol}`);
   }
 
+  // A token can never become curated from a score alone.  This keeps legacy
+  // lifecycle scoring useful while making missing/unknown sell-route,
+  // Token-2022, owner, authority, or freshness evidence fail closed.
+  const admission = safetyAdmission(token, { includeLifecycle: false });
+  if (token.state === 'curated' && !admission.ok) {
+    token.state = 'watching';
+    token.admission = 'watching';
+    token.curatedAt = null;
+    token.discardReason = admission.reasons.join('; ');
+    emit('token:admission-blocked', { token, reasons: admission.reasons });
+  }
+
   // --- Discard rules (checked first: a rug disqualifies even a curated token) ---
   if (
     token.peakLiquidityUsd > 1000 && token.liquidityUsd != null &&
     token.liquidityUsd < token.peakLiquidityUsd * (1 - DISCARD_LIQ_DROP_PCT / 100)
   ) {
+    untrack(token.mint);
     return discard(token, `liquidity dropped >${DISCARD_LIQ_DROP_PCT}% from peak (rug signal)`);
   }
+
+  // --- Market Cap Floor (< $4k) and ATH Drawdown Rules (< $5k after $50k, < $10k after $300k) ---
+  const mcap = token.marketCapUsd;
+  const peakMcap = token.peakMarketCapUsd ?? mcap ?? 0;
+  if (mcap != null && Number.isFinite(mcap)) {
+    if (mcap < 4000) {
+      if (token.state === 'curated') {
+        untrack(token.mint);
+        return discard(token, `market cap $${Math.round(mcap)} below $4k floor`);
+      }
+    }
+    if (peakMcap >= 300000 && mcap < 10000) {
+      if (token.state === 'curated') {
+        untrack(token.mint);
+        return discard(token, `market cap dropped to $${Math.round(mcap)} after peak of $${Math.round(peakMcap)} (crossed $300k, below $10k)`);
+      }
+    }
+    if (peakMcap >= 50000 && mcap < 5000) {
+      if (token.state === 'curated') {
+        untrack(token.mint);
+        return discard(token, `market cap dropped to $${Math.round(mcap)} after peak of $${Math.round(peakMcap)} (crossed $50k, below $5k)`);
+      }
+    }
+  }
+
   // A missing score means the token hasn't been scored yet (out of scope for
   // safety analysis, or the analysis failed) — treat as UNKNOWN, not zero.
   // Discarding on score 0 would delete every non-pump.fun token (revivals,
@@ -220,17 +330,46 @@ function evaluateLifecycle(token) {
     }
   }
 
-  // --- Curation gate ---
+  // --- Curation gate & Early Meme Caller ---
   if (token.state === 'watching') {
+    const earlyCall = evaluateEarlyCaller(token);
+    if (earlyCall.isEarlySignal) {
+      token.earlySignal = earlyCall;
+      token.strategy = 'Early Runner';
+      if (!Array.isArray(token.tags)) token.tags = [];
+      if (!token.tags.includes('early_runner')) token.tags.push('early_runner');
+    }
+
     const hasLiquidity = (token.liquidityUsd ?? 0) >= CURATE_MIN_LIQUIDITY_USD;
     const notShrinking = (token.traction?.liquidityGrowthPct ?? 0) > -30 && (token.traction?.mcapGrowthPct ?? 0) > -30;
+    const isEvm = token.chain && token.chain !== 'solana';
 
-    if (score >= CURATE_MIN_SCORE && hasLiquidity && token.passes >= CURATE_MIN_PASSES && notShrinking) {
+    // EVM tokens (Robinhood/GeckoTerminal) have no Solana SPL checks — use a
+    // lighter gate: enrichment freshness + liquidity + passes are sufficient.
+    const safetyReady = isEvm
+      ? (token.enrichmentStatus === 'fresh' && Number.isFinite(token.enrichedAt))
+      : safetyAdmission(token, { includeLifecycle: false }).ok;
+
+    // EVM tokens use a lower score floor since analyzeToken returns null for
+    // Solana-specific checks, leaving them at the GMGN base score (~50-60).
+    const minScore = isEvm ? 0 : CURATE_MIN_SCORE;
+    const isEarlyBreakout = earlyCall.isEarlySignal && (safetyReady || isEvm || (token.safety?.score ?? 0) >= 40);
+    const passesMcapFloor = (token.marketCapUsd == null || token.marketCapUsd >= 4000);
+    const peakMcap = token.peakMarketCapUsd ?? token.marketCapUsd ?? 0;
+    const notCollapsed = !(peakMcap >= 300000 && (token.marketCapUsd ?? 0) < 10000) && !(peakMcap >= 50000 && (token.marketCapUsd ?? 0) < 5000);
+    const passesQualityGate = (score >= minScore && hasLiquidity && token.passes >= CURATE_MIN_PASSES && notShrinking && safetyReady && passesMcapFloor && notCollapsed);
+
+    if ((passesQualityGate || isEarlyBreakout) && passesMcapFloor && notCollapsed) {
       token.state = 'curated';
       token.admission = 'qualified';
       token.curatedAt = Date.now();
       token.curatedPriceUsd = token.priceUsd ?? null;
-      log('info', `CURATED ${token.symbol || token.mint.slice(0, 8)} — score ${score}, liq $${Math.round(token.liquidityUsd)}, traction ${token.traction?.tractionScore}`);
+      if (isEarlyBreakout) {
+        log('info', `🚀 EARLY RUNNER BREAKOUT: ${token.symbol || token.mint.slice(0, 8)} [${token.chain || 'solana'}] — MCap $${Math.round(token.marketCapUsd || 0)}, 5m Vol $${Math.round(token.volume5mUsd || 0)}, score ${score}`);
+        emit('token:early-call', { token, earlyCall });
+      } else {
+        log('info', `CURATED ${token.symbol || token.mint.slice(0, 8)} [${token.chain || 'solana'}] — score ${score}, liq $${Math.round(token.liquidityUsd)}, traction ${token.traction?.tractionScore}`);
+      }
       emit('token:curated', { token });
     }
   }
@@ -265,7 +404,11 @@ export function canEvict(token) {
 export function selectEvictable(records, hotLimit) {
   const protectedRecords = records.filter(token => !canEvict(token));
   const evictable = records.filter(canEvict)
-    .sort((a, b) => (b.safety?.score ?? b.score?.memeScore ?? -1) - (a.safety?.score ?? a.score?.memeScore ?? -1));
+    .sort((a, b) => {
+      const timeDiff = (b.createdAt ?? 0) - (a.createdAt ?? 0);
+      if (timeDiff !== 0) return timeDiff;
+      return (b.safety?.score ?? 0) - (a.safety?.score ?? 0);
+    });
   return [...protectedRecords, ...evictable.slice(0, hotLimit)];
 }
 
@@ -338,6 +481,33 @@ export function applyMarketPatch(mint, patch) {
   if (patch.liquidityUsd != null) {
     token.peakLiquidityUsd = Math.max(token.peakLiquidityUsd ?? 0, patch.liquidityUsd);
   }
+  if (patch.marketCapUsd != null || token.marketCapUsd != null) {
+    token.peakMarketCapUsd = Math.max(token.peakMarketCapUsd ?? 0, patch.marketCapUsd ?? token.marketCapUsd ?? 0);
+  }
+
+  // Live market cap floor (< $4k) and ATH drawdown checks for curated tokens
+  if (token.state === 'curated') {
+    const mcap = token.marketCapUsd;
+    const peakMcap = token.peakMarketCapUsd ?? mcap ?? 0;
+    if (mcap != null && Number.isFinite(mcap)) {
+      if (mcap < 4000) {
+        untrack(token.mint);
+        discard(token, `market cap $${Math.round(mcap)} below $4k floor`);
+        return token;
+      }
+      if (peakMcap >= 300000 && mcap < 10000) {
+        untrack(token.mint);
+        discard(token, `market cap dropped to $${Math.round(mcap)} after peak $${Math.round(peakMcap)} (crossed $300k, below $10k)`);
+        return token;
+      }
+      if (peakMcap >= 50000 && mcap < 5000) {
+        untrack(token.mint);
+        discard(token, `market cap dropped to $${Math.round(mcap)} after peak $${Math.round(peakMcap)} (crossed $50k, below $5k)`);
+        return token;
+      }
+    }
+  }
+
   scheduleSave();
   emit('token:update', { token });
   return token;

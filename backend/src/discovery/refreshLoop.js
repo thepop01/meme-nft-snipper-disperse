@@ -8,7 +8,7 @@
 import { emit, log } from '../bus.js';
 import { pushAlert } from '../alerts.js';
 import {
-  getCuratedTokens, getTokenByMint, getTokenByKey, applyMarketPatch, flagRugged,
+  getCuratedTokens, getTokenByMint, getTokenByKey, applyMarketPatch, flagRugged, getTokens,
 } from './registry.js';
 
 // Maps our internal chain names to DexScreener's `chainId` slug. EVM addresses
@@ -53,6 +53,7 @@ export function collectRefreshMints() {
   for (const t of getCuratedTokens()) add(t.mint, t.chain);
   for (const t of trackedMints()) add(typeof t === 'string' ? t : t.mint, typeof t === 'string' ? 'solana' : t.chain);
   for (const p of getPositions()) if (p.mint) add(p.mint, p.chain);
+  for (const t of (getTokens ? getTokens({ view: 'all' }) : []).slice(0, 50)) add(t.mint, t.chain);
   return [...out.values()];
 }
 

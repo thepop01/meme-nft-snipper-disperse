@@ -2,14 +2,41 @@ import React from 'react';
 import { ago } from '../../utils/format';
 import { TokenAvatar } from './TokenRow';
 
+export function isAlphaEligible(t) {
+  if (!t) return false;
+  const mcap = t.marketCapUsd;
+  const peakMcap = Math.max(t.peakMarketCapUsd ?? 0, mcap ?? 0);
+  if (mcap != null && Number.isFinite(mcap)) {
+    if (mcap < 4000) return false;
+    if (peakMcap >= 300000 && mcap < 10000) return false;
+    if (peakMcap >= 50000 && mcap < 5000) return false;
+  }
+  return true;
+}
+
 export function pickAlphaCalls(tokens, limit = 5) {
-  return tokens
-    .filter(t => t.state === 'curated')
+  const eligible = tokens.filter(isAlphaEligible);
+  const curated = eligible
+    .filter(t => t.state === 'curated' || t.earlySignal?.isEarlySignal)
+    .sort((a, b) => {
+      const aEarly = a.earlySignal?.isEarlySignal ? 1 : 0;
+      const bEarly = b.earlySignal?.isEarlySignal ? 1 : 0;
+      if (bEarly !== aEarly) return bEarly - aEarly;
+      return (b.traction?.tractionScore ?? 0) - (a.traction?.tractionScore ?? 0);
+    });
+  if (curated.length > 0) return curated.slice(0, limit);
+
+  // Fallback: if no tokens have state === 'curated', pick top tokens by traction/safety
+  return eligible
+    .filter(t => (t.traction?.tractionScore ?? 0) > 0 || (t.safety?.score ?? 0) >= 40)
     .sort((a, b) => (b.traction?.tractionScore ?? 0) - (a.traction?.tractionScore ?? 0))
     .slice(0, limit);
 }
 
-function strategyFor(token) {
+export function strategyFor(token) {
+  if (token.earlySignal?.isEarlySignal || token.strategy === 'Early Runner' || (token.tags || []).includes('early_runner')) {
+    return '🚀 Early Runner';
+  }
   if ((token.smartWallets ?? 0) >= 10) return 'Smart Money';
   if (token.source === 'revival') return 'Narrative Shift';
   if (token.trenchType === 'near_completion') return 'Early Liquidity';
@@ -42,9 +69,17 @@ export default function AlphaCallsTable({ tokens = [], onBuy, onSelect }) {
                   </td>
                   <td><span className="selector-chip active">{strategyFor(token)}</span></td>
                   <td className="text-dim" style={{ fontSize: '0.75rem' }}>
-                    T{token.traction?.tractionScore ?? '--'} · S{token.safety?.score ?? '--'}
-                    {token.smartWallets != null ? ` · ${token.smartWallets} smart` : ''}
-                    {token.bundlerPct != null ? ` · ${token.bundlerPct}% bund` : ''}
+                    {token.earlySignal?.signals?.length > 0 ? (
+                      <span style={{ color: '#10b981', fontWeight: 500 }}>
+                        {token.earlySignal.signals.slice(0, 2).join(' · ')}
+                      </span>
+                    ) : (
+                      <>
+                        T{token.traction?.tractionScore ?? '--'} · S{token.safety?.score ?? '--'}
+                        {token.smartWallets != null ? ` · ${token.smartWallets} smart` : ''}
+                        {token.bundlerPct != null ? ` · ${token.bundlerPct}% bund` : ''}
+                      </>
+                    )}
                   </td>
                   <td className="mono">{token.marketCapUsd ? `$${Math.round(token.marketCapUsd / 1000)}K` : '--'}</td>
                   <td className="text-dim">{token.createdAt ? `${ago(token.createdAt)}` : '--'}</td>

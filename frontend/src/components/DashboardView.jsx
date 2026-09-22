@@ -67,9 +67,8 @@ const DashboardView = ({ walletGroups, setActiveTab }) => {
 
   return (
     <div className="dashboard-container">
-      <div className="page-header">
-        <h2>Dashboard</h2>
-        <p>Everything at a glance — wallet tools and multi-chain meme discovery</p>
+      <div className="page-header" style={{ marginBottom: '0.65rem' }}>
+        <h2 style={{ margin: 0 }}>Dashboard</h2>
       </div>
 
       {backend === null && (

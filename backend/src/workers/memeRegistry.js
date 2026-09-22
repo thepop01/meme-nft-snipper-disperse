@@ -8,6 +8,8 @@ export const SYSTEM_MINTS = new Set([
   'So11111111111111111111111111111111111111112',
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
   'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+  '0x0000000000000000000000000000000000000000',
+  '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
 ]);
 
 /**
@@ -120,6 +122,7 @@ export function upsertMeme(item) {
   if (item.name && typeof item.name === 'string') existing.name = item.name;
   if (item.symbol && typeof item.symbol === 'string') existing.symbol = item.symbol;
   if (item.chain && typeof item.chain === 'string') existing.chain = item.chain;
+  if (item.poolAddress && typeof item.poolAddress === 'string') existing.poolAddress = item.poolAddress;
 
   if (item.currentMcap != null) {
     existing.currentMcap = toSafeNumber(item.currentMcap, 0);
@@ -263,10 +266,45 @@ export function getUnbackfilledMemes(limit = 10, chain = null) {
   if (chain) {
     list = list.filter(m => m.chain === chain && (chain !== 'solana' || !m.ca.startsWith('0x')));
   }
-  list.sort((a, b) => (b.athMcap || 0) - (a.athMcap || 0));
+  // Sort primarily by backfillAttempts ASC (unattempted first to prevent head-of-line blocking),
+  // secondarily by athMcap DESC (highest value first).
+  list.sort((a, b) => {
+    const attemptsA = Number(a.backfillAttempts) || 0;
+    const attemptsB = Number(b.backfillAttempts) || 0;
+    if (attemptsA !== attemptsB) {
+      return attemptsA - attemptsB;
+    }
+    return (b.athMcap || 0) - (a.athMcap || 0);
+  });
   if (limit == null || limit <= 0) return list;
   const parsedLimit = toSafeNumber(limit, 10);
   return list.slice(0, Math.max(0, parsedLimit));
+}
+
+/**
+ * Record a backfill attempt for a meme coin without marking it backfilled.
+ * Rotates the meme behind untried memes to prevent head-of-line blocking.
+ *
+ * @param {string} ca
+ * @returns {Object|null}
+ */
+export function recordBackfillAttempt(ca) {
+  if (!ca || typeof ca !== 'string') return null;
+  const trimmed = ca.trim();
+  if (!trimmed) return null;
+  const reg = loadRegistry();
+
+  let m = reg.get(trimmed);
+  if (!m && (trimmed.startsWith('0x') || trimmed.startsWith('0X'))) {
+    m = reg.get(trimmed.toLowerCase());
+  }
+  if (!m) return null;
+
+  m.backfillAttempts = (Number(m.backfillAttempts) || 0) + 1;
+  m.lastBackfillAttemptTs = Date.now();
+  m.updatedAt = Date.now();
+  persist();
+  return m;
 }
 
 /**

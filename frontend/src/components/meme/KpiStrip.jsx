@@ -48,11 +48,6 @@ export default function KpiStrip({ tokens = [], positions = [], trades = [] }) {
         <small>open now</small>
       </div>
       <div className="kpi-card">
-        <span>Alpha Calls</span>
-        <strong>{kpis.curated}</strong>
-        <small>curated queue</small>
-      </div>
-      <div className="kpi-card">
         <span>Live Scanning</span>
         <strong>{kpis.total}</strong>
         <small>{kpis.newLaunches1h} new / 1h · {kpis.active5m} active 5m</small>

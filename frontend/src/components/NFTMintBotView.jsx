@@ -8,7 +8,6 @@ import {
 import { nftApi } from '../utils/nftApi.js';
 import { subscribeWs } from '../utils/sniperApi.js';
 import { shortAddr } from '../utils/format.js';
-import { UmiBanner } from './ui/UmiBanner';
 import { ChainSvgIcon } from './ui/ChainBar';
 import { ResolvedWalletPreview, WalletSelector, WalletTagSelector } from './ui/WalletSelectors.jsx';
 import { useToast } from './ui/useToast';
@@ -814,9 +813,6 @@ const NFTMintBotView = ({ walletDirectory = { wallets: [], tags: [] } }) => {
 
   return (
     <div className="umi-page-container">
-      {/* Purple Top Banner */}
-      <UmiBanner />
-
       {justScheduled && (
         <div className="umi-success-scheduled-banner">
           <Zap size={15} />

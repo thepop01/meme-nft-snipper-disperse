@@ -23,7 +23,6 @@ import {
 import { walletApi } from '../utils/walletApi';
 import { useToast } from './ui/useToast';
 import { Modal } from './ui/Modal';
-import { UmiBanner } from './ui/UmiBanner';
 import { ChainBar, EthGlyphSmall } from './ui/ChainBar';
 import { balanceChainFor, chainLabelFor } from '../utils/chainCatalog.js';
 
@@ -541,41 +540,47 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
 
   return (
     <div className="umi-page-container">
-      {/* Purple Top Banner */}
-      <UmiBanner />
-
-      {/* Top Action Bar: + Create and Import Buttons */}
-      <div className="umi-wallets-top-actions">
-        <button 
-          type="button" 
-          className="umi-btn-action" 
-          onClick={() => setShowAddWallet(true)}
-        >
-          <Plus size={15} /> Create
-        </button>
-
-        <button 
-          type="button" 
-          className="umi-btn-action" 
-          onClick={() => setShowImport(true)}
-        >
-          <ArrowDownToLine size={15} /> Import
-        </button>
+      {/* Top Header: Title & Direct Actions */}
+      <div className="page-header page-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <h2 style={{ margin: 0 }}>Wallets</h2>
+          <span style={{ fontSize: '0.72rem', color: '#6b7280', background: '#f3f4f6', padding: '2px 8px', borderRadius: '4px' }}>
+            {walletDirectory.wallets.length} total
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          <button 
+            type="button" 
+            className="btn-primary btn-xs" 
+            onClick={() => setShowAddWallet(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0.6rem' }}
+          >
+            <Plus size={13} /> Create
+          </button>
+          <button 
+            type="button" 
+            className="btn-outline btn-xs" 
+            onClick={() => setShowImport(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0.6rem' }}
+          >
+            <ArrowDownToLine size={13} /> Import
+          </button>
+        </div>
       </div>
 
       {/* Main White Card Container */}
       <div className="umi-card-container">
 
-        {/* 1. WALLET TYPE TOGGLE (Address Only vs With Private Key) */}
-        <div className="umi-wallet-type-segmented-bar">
-          <div className="umi-type-toggle-pills">
+        {/* 1. COMPACT TYPE & BASKET FILTER ROW */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+          <div className="umi-type-toggle-pills" style={{ margin: 0 }}>
             <button
               type="button"
               className={`umi-type-pill ${typeFilter === 'all' ? 'active' : ''}`}
               onClick={() => setTypeFilter('all')}
             >
-              <WalletCards size={14} />
-              <span>All Wallets</span>
+              <WalletCards size={13} />
+              <span>All</span>
               <span className="umi-type-count">{countAll}</span>
             </button>
 
@@ -584,8 +589,8 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
               className={`umi-type-pill ${typeFilter === 'watch' ? 'active' : ''}`}
               onClick={() => setTypeFilter('watch')}
             >
-              <Eye size={14} />
-              <span>Address Only (Watch-only)</span>
+              <Eye size={13} />
+              <span>Watch-only</span>
               <span className="umi-type-count">{countWatch}</span>
             </button>
 
@@ -594,22 +599,13 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
               className={`umi-type-pill ${typeFilter === 'signer' ? 'active' : ''}`}
               onClick={() => setTypeFilter('signer')}
             >
-              <KeyRound size={14} />
-              <span>With Private Key (Signers)</span>
+              <KeyRound size={13} />
+              <span>Signers</span>
               <span className="umi-type-count">{countSigner}</span>
             </button>
           </div>
-        </div>
 
-        {/* 2. BASKETS / CATEGORY FILTER ROW */}
-        <div className="umi-baskets-toolbar">
-          <div className="umi-baskets-label-row">
-            <span className="umi-baskets-title">
-              <Folder size={13} /> Baskets & Categories:
-            </span>
-          </div>
-
-          <div className="umi-baskets-chip-list">
+          <div className="umi-baskets-chip-list" style={{ margin: 0, gap: '0.3rem' }}>
             <button
               type="button"
               className={`umi-basket-chip ${activeBasketId === 'all' ? 'active' : ''}`}
@@ -646,26 +642,28 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
               onClick={() => setShowNewBasket(true)}
               title="Create new basket"
             >
-              <Plus size={13} />
-              <span>New Basket</span>
+              <Plus size={11} />
+              <span>New</span>
             </button>
           </div>
         </div>
 
-        {/* 3. SEARCH BAR */}
-        <div className="umi-search-box-wrap">
-          <input
-            type="text"
-            className="umi-search-box-input"
-            placeholder="Search by name, address, or basket..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-          />
+        {/* 2. SEARCH BAR & CHAIN SELECTOR */}
+        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+          <div className="umi-search-box-wrap" style={{ flex: 1, minWidth: '220px', margin: 0 }}>
+            <input
+              type="text"
+              className="umi-search-box-input"
+              placeholder="Search by name, address, or basket..."
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+            />
+          </div>
         </div>
 
-        {/* 4. 2-ROW CHAIN SELECTOR TOOLBAR */}
+        {/* 3. CHAIN SELECTOR TOOLBAR */}
         <ChainBar activeChain={activeChain} onSelectChain={setActiveChain} />
-        {balanceUnsupported && <p className="text-dim">{balanceUnsupported}</p>}
+        {balanceUnsupported && <p className="text-dim" style={{ fontSize: '0.75rem', margin: '0.25rem 0' }}>{balanceUnsupported}</p>}
 
         {/* 5. BULK ACTION BAR (when wallets are selected) */}
         {selectedWalletIds.length > 0 && (
@@ -731,7 +729,7 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
           <table className="umi-clean-table">
             <thead>
               <tr>
-                <th style={{ width: 44, textAlign: 'center' }}>
+                <th style={{ width: 34, textAlign: 'center', padding: '0.32rem 0.25rem' }}>
                   <input
                     type="checkbox"
                     className="umi-checkbox"
@@ -743,7 +741,7 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
                 <th style={{ textAlign: 'left' }}>NAME &amp; BASKET</th>
                 <th style={{ textAlign: 'left' }}>TYPE</th>
                 <th style={{ textAlign: 'left' }}>ADDRESS</th>
-                <th style={{ textAlign: 'right', paddingRight: '2.5rem' }}>
+                <th style={{ textAlign: 'right', paddingRight: '0.85rem' }}>
                   <button 
                     type="button" 
                     className="umi-th-sort-btn"
@@ -752,7 +750,7 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
                     BALANCE <span>↑↓</span>
                   </button>
                 </th>
-                <th style={{ width: 44, textAlign: 'center' }}></th>
+                <th style={{ width: 34, textAlign: 'center', padding: '0.32rem 0.25rem' }}></th>
               </tr>
             </thead>
             <tbody>
@@ -845,7 +843,7 @@ const WalletsView = ({ walletDirectory = { wallets: [], tags: [] }, setWalletDir
                       </span>
                     </td>
 
-                    <td style={{ textAlign: 'right', paddingRight: '2rem' }}>
+                    <td style={{ textAlign: 'right', paddingRight: '0.85rem' }}>
                       <span className="umi-wallet-balance-num">
                         {fmtEthBalance(wei)}
                       </span>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, ArrowUpRight, AtSign, CheckCircle, ExternalLink, Globe, Info, Link2, Radio, ShieldCheck, Star, TrendingDown, TrendingUp } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, AtSign, CheckCircle, ExternalLink, Globe, Info, Link2, Radio, ShieldCheck, Star, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { ago, fmtUsd, fmtUsdPrecise } from '../../utils/format';
 import { Pill } from '../ui/Primitives';
 import TokenChart from './TokenChart';
@@ -13,14 +13,8 @@ function IntelligenceRow({ label, value, tone }) {
   return <div className="intelligence-row"><span>{label}</span><strong className={tone || ''}>{value ?? 'Unavailable'}</strong></div>;
 }
 
-export default function TokenWorkspace({ token, onTrack, customList, onPin, onExclude }) {
-  if (!token) return (
-    <div className="market-empty">
-      <Radio size={28} />
-      <strong>Select a market</strong>
-      <span>Choose a token from the scanner to inspect its flow, holders, and risk signals.</span>
-    </div>
-  );
+export default function TokenWorkspace({ token, onTrack, customList, onPin, onExclude, onClose, isTracked }) {
+  if (!token) return null;
 
   const mint = token.mint || '';
   const buys = token.txns?.m5?.buys ?? null;
@@ -84,14 +78,31 @@ export default function TokenWorkspace({ token, onTrack, customList, onPin, onEx
           </div>
         </div>
 
-        <div className="selected-token-price">
-          <strong>{fmtUsdPrecise(token.priceUsd)}</strong>
-          <span className={change == null || !Number.isFinite(change) ? 'text-dim' : change >= 0 ? 'text-green' : 'text-red'}>
-            {change == null || !Number.isFinite(change) ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}
-          </span>
-          {onTrack && (
-            <button className="btn-outline btn-xs workspace-track" onClick={() => onTrack(token)} title="Add to tracked watchlist">
-              <Star size={12} /> Track
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+          <div className="selected-token-price">
+            <strong>{fmtUsdPrecise(token.priceUsd)}</strong>
+            <span className={change == null || !Number.isFinite(change) ? 'text-dim' : change >= 0 ? 'text-green' : 'text-red'}>
+              {change == null || !Number.isFinite(change) ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}
+            </span>
+            {onTrack && (
+              <button
+                className={`btn-outline btn-xs workspace-track ${isTracked ? 'active-track' : ''}`}
+                onClick={() => onTrack(token)}
+                title={isTracked ? 'Remove from tracked watchlist' : 'Add to tracked watchlist'}
+              >
+                <Star size={12} fill={isTracked ? 'currentColor' : 'none'} /> {isTracked ? 'Untrack' : 'Track'}
+              </button>
+            )}
+          </div>
+          {onClose && (
+            <button
+              type="button"
+              className="icon-btn-danger"
+              onClick={onClose}
+              title="Close token inspection"
+              style={{ width: '28px', height: '28px', borderRadius: '6px' }}
+            >
+              <X size={15} />
             </button>
           )}
         </div>

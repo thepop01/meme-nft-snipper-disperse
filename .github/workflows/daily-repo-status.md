@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  discussions: read
   issues: read
   pull-requests: read
 
@@ -24,6 +25,7 @@ tools:
     # If in a private repo this has no particular effect.
     lockdown: false
     min-integrity: none # This workflow is allowed to examine and comment on any issues
+    toolsets: [default, discussions]
 
 safe-outputs:
   mentions: false
@@ -33,6 +35,10 @@ safe-outputs:
     labels: [report, daily-status]
     close-older-issues: true
 engine: claude
+
+jobs:
+  detection:
+    if: needs.agent.outputs.output_types != '' || needs.agent.outputs.has_patch == 'true'
 
 source: githubnext/agentics/workflows/repo-status.md@4bc8419fad05e6b032741cbfd189986700bcf71c
 ---

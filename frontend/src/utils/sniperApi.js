@@ -44,6 +44,8 @@ export const api = {
     const q = new URLSearchParams(params).toString();
     return request('GET', `/api/tokens${q ? '?' + q : ''}`);
   },
+  token: (mint) => request('GET', `/api/tokens/${encodeURIComponent(mint)}`),
+
   memefinderQualified: (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return request('GET', `/api/memefinder/qualified${q ? '?' + q : ''}`);
@@ -81,7 +83,10 @@ export const api = {
   },
   createLimitOrder: (payload) => request('POST', '/api/limit-orders', payload),
   cancelLimitOrder: (id) => request('DELETE', `/api/limit-orders/${id}`),
-  tracked: () => request('GET', '/api/tracked'),
+  tracked: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request('GET', `/api/tracked${q ? '?' + q : ''}`);
+  },
   trackToken: (mint) => request('POST', '/api/tracked/pin', { mint }),
   untrack: (mint) => request('DELETE', `/api/tracked/${mint}`),
   logs: () => request('GET', '/api/logs'),
@@ -93,6 +98,16 @@ export const api = {
     const q = new URLSearchParams(params).toString();
     return request('GET', `/api/providers/health${q ? `?${q}` : ''}`);
   },
+  smartWallets: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request('GET', `/api/smart-wallets${q ? `?${q}` : ''}`);
+  },
+  smartWalletRunners: () => request('GET', '/api/smart-wallets/runners'),
+  saveSmartWallets: (wallets) => request('POST', '/api/smart-wallets', { wallets }),
+  deleteSmartWallet: (chain, address) => request('DELETE', `/api/smart-wallets/${chain}/${encodeURIComponent(address)}`),
+  createLineageWallet: (payload) => request('POST', '/api/smart-wallets/lineage', payload),
+  promoteSmartWallet: (chain, address) => request('POST', `/api/smart-wallets/promote/${chain}/${encodeURIComponent(address)}`),
+  ingestEarlyBuyers: (payload) => request('POST', '/api/smart-wallets/early-buyers', payload),
 };
 
 // --- WebSocket with auto-reconnect ---
@@ -104,11 +119,23 @@ let wsConnected = false;
 
 function wsUrl() {
   const base = getBackendUrl();
-  const token = getApiToken();
-  const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
   // Empty backend URL = same-origin (nginx proxies /ws to the backend).
-  if (!base) return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws${suffix}`;
-  return base.replace(/^http/, 'ws') + '/ws' + suffix;
+  if (!base) return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
+  return base.replace(/^http/, 'ws') + '/ws';
+}
+
+function encodeBase64Url(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+}
+
+function wsProtocols() {
+  const token = getApiToken();
+  // The WebSocket browser API cannot set Authorization headers. A subprotocol
+  // carries the bearer value without placing it in a URL/query string.
+  return token ? [`bearer.${encodeBase64Url(token)}`] : [];
 }
 
 function notifyStatus() {
@@ -118,7 +145,8 @@ function notifyStatus() {
 export function connectWs() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
-    ws = new WebSocket(wsUrl());
+    const protocols = wsProtocols();
+    ws = protocols.length ? new WebSocket(wsUrl(), protocols) : new WebSocket(wsUrl());
   } catch {
     scheduleReconnect();
     return;

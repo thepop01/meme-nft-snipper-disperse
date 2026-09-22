@@ -7,6 +7,7 @@ vi.mock('../../store.js', () => ({
 }));
 vi.mock('../../bus.js', () => ({ emit: vi.fn(), log: vi.fn() }));
 vi.mock('../../alerts.js', () => ({ pushAlert: vi.fn() }));
+vi.mock('../../analysis/safety.js', () => ({ assertTokenBuyable: vi.fn() }));
 vi.mock('../../discovery/registry.js', () => ({ getToken: vi.fn() }));
 vi.mock('../../trading/executor.js', () => ({ executeBuy: vi.fn() }));
 vi.mock('../../discovery/enrich.js', () => ({

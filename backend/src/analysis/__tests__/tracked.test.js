@@ -136,4 +136,33 @@ describe('tracked tier', () => {
     expect(cadence.normal).toContain('active');
     expect(cadence.slow).toContain('quiet');
   });
+
+  it('rejects tokens with marketCapUsd < 4000', () => {
+    const token = { mint: 'sub4k', symbol: 'SUB', marketCapUsd: 3500, liquidityUsd: 10000, state: 'curated' };
+    const res = tracked.promoteToTracked(token, 'curated');
+    expect(res).toBeNull();
+    expect(tracked.getTrackedByMint('sub4k')).toBeNull();
+  });
+
+  it('rejects tokens that peaked >= 50k and fell below 5k', () => {
+    const token = { mint: 'peak50k', symbol: 'DROP', peakMarketCapUsd: 60000, marketCapUsd: 4500, liquidityUsd: 10000 };
+    const res = tracked.promoteToTracked(token, 'manual');
+    expect(res).toBeNull();
+  });
+
+  it('rejects tokens that peaked >= 300k and fell below 10k', () => {
+    const token = { mint: 'peak300k', symbol: 'DROP2', peakMarketCapUsd: 350000, marketCapUsd: 8000, liquidityUsd: 10000 };
+    const res = tracked.promoteToTracked(token, 'manual');
+    expect(res).toBeNull();
+  });
+
+  it('evicts tracked tokens live if market cap collapses or falls below 4k', () => {
+    const token = { mint: 'liveCollapse', symbol: 'LIVE', marketCapUsd: 55000, liquidityUsd: 10000 };
+    tracked.promoteToTracked(token, 'manual');
+    expect(tracked.getTrackedByMint('liveCollapse')).not.toBeNull();
+
+    // Live update crashes below 5k after peaking > 50k
+    tracked.updateTrackedMarket('liveCollapse', { marketCapUsd: 4200, liquidityUsd: 2000 });
+    expect(tracked.getTrackedByMint('liveCollapse')).toBeNull();
+  });
 });

@@ -11,6 +11,7 @@ import { emit, log, onEvent } from '../bus.js';
 import { executeBuy } from '../trading/executor.js';
 import { openPosition, getPositions } from './positions.js';
 import { config } from '../config.js';
+import { assertTokenBuyable } from '../analysis/safety.js';
 
 export const PRESETS = {
   conservative: {
@@ -240,6 +241,12 @@ function ensureListener() {
 // Static filters shared by both modes. Returns [] when the token qualifies.
 function baseFilterReasons(bot, token) {
   const reasons = [];
+  if (token.state !== 'curated') reasons.push(`state ${token.state || 'unknown'} is not curated`);
+  if (token.admission !== 'qualified') reasons.push(`admission ${token.admission || 'unknown'} is not qualified`);
+  const safetyGate = (() => {
+    try { assertTokenBuyable(token); return null; } catch (err) { return err; }
+  })();
+  if (safetyGate) reasons.push(...(safetyGate.reasons || [safetyGate.message]));
   if (!bot.sources.includes(token.source)) reasons.push('wrong source');
   if ((token.safety?.score ?? 0) < bot.minSafetyScore) reasons.push(`score ${token.safety?.score ?? 0} < ${bot.minSafetyScore}`);
   if (bot.minLiquidityUsd && (token.liquidityUsd ?? 0) < bot.minLiquidityUsd) {
@@ -350,6 +357,9 @@ async function buy(bot, token, reason) {
     const buyResult = await executeBuy(token, {
       solAmount: bot.buyAmountSol,
       slippagePct: bot.slippagePct,
+      // Stable across a pre-submit retry; an ambiguous send is terminal and
+      // must be reconciled from the executor's durable submission record.
+      idempotencyKey: `bot:${bot.id}:buy:${token.mint}`,
     });
     buyResult.solSpent = bot.buyAmountSol;
 
@@ -369,8 +379,11 @@ async function buy(bot, token, reason) {
       log('error', `Bot "${bot.name}" booked position failed AFTER buy of ${token.symbol || token.mint.slice(0, 8)} — NOT retrying (reconcile manually): ${bookErr.message}`);
     }
   } catch (err) {
-    // one retry allowed: first failure stays eligible, second is final
-    setDecision(bot.id, token.mint, isRetry ? 'failed-final' : 'failed');
+    // A pre-submit rejection is safe to retry once. A timeout/transport error
+    // after submission has an unknown outcome and must stay terminal until the
+    // durable executor intent is reconciled; retrying it could double-buy.
+    const unknownOutcome = err?.submissionOutcome === 'unknown';
+    setDecision(bot.id, token.mint, unknownOutcome || isRetry ? 'failed-final' : 'failed');
     log('error', `Bot "${bot.name}" buy failed for ${token.symbol || token.mint.slice(0, 8)}: ${err.message}`);
   } finally {
     inFlightBuys.delete(token.mint);
