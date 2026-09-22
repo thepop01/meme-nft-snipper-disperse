@@ -20,7 +20,7 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/Robinhood/i);
   });
 
-  it('renders all 4 category tables and actions (Smart, Tracked, Whale, Lineage)', () => {
+  it('renders all 5 category tables and actions (Smart, Tracked, Whale, Lineage, Snipers & Bundlers)', () => {
     const html = renderToString(
       <MemoryRouter>
         <ToastProvider>
@@ -32,6 +32,7 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/Tracked Wallets/i);
     expect(html).toMatch(/Whale Wallets/i);
     expect(html).toMatch(/Lineage Wallets/i);
+    expect(html).toMatch(/Snipers &amp; Bundlers/i);
     expect(html).toMatch(/Add Whale Wallet/i);
     expect(html).toMatch(/Connect Lineage Wallet/i);
   });
@@ -119,6 +120,7 @@ describe('SmartWalletsView', () => {
     );
 
     expect(html).toMatch(/<th>Wallet Address<\/th>/);
+    expect(html).toMatch(/<th>Balance<\/th>/);
     expect(html).toMatch(/<th>PnL<\/th>/);
     expect(html).toMatch(/<th>Win Rate<\/th>/);
     expect(html).toMatch(/<th>Buy\/Win<\/th>/);
@@ -199,7 +201,7 @@ describe('SmartWalletsView', () => {
     expect(html).toMatch(/—/);
   });
 
-  it('renders multi-source scan selector and external inspection links (GMGN)', () => {
+  it('renders streamlined action controls and external inspection links (GMGN)', () => {
     const mockWallets = [
       {
         address: '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1',
@@ -218,16 +220,101 @@ describe('SmartWalletsView', () => {
       </MemoryRouter>
     );
 
-    // Verify source selector options
-    expect(html).toMatch(/GMGN \(Multi-chain\)/);
-    expect(html).toMatch(/FOMO\.family \(Solana\)/);
-    expect(html).toMatch(/Kolscan \(Solana\)/);
-    expect(html).toMatch(/Nock Scout \(Solana\)/);
+    // Verify streamlined header action buttons
+    expect(html).toMatch(/Add Whale Wallet/);
+    expect(html).toMatch(/Connect Lineage Wallet/);
+    expect(html).not.toMatch(/Scan Solana/);
+    expect(html).not.toMatch(/FOMO\.family/);
 
     // Verify external inspection links
     expect(html).toMatch(/gmgn\.ai\/sol\/address\/5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1/);
     expect(html).not.toMatch(/axiom\.trade/);
     expect(html).not.toMatch(/intel\.arkm\.com/);
     expect(html).not.toMatch(/app\.nansen\.ai/);
+  });
+
+  it('renders category-tailored subfilters for tracked wallets (Early Buyers, Top Runners, Snipers, Profitable, KOL)', () => {
+    const mockTracked = [
+      {
+        address: '8ZN71XTdVo8yRovnGLmNgW3Tgniw6A4J3JGLvPD686FP',
+        chain: 'solana',
+        category: 'tracked',
+        earlyBuyerInfo: { rank: 1, symbol: 'PEPE', athMcap: 25000000 },
+        realizedProfitUsd: 1500,
+        tags: ['early_buyer', 'runner_20m', 'kol'],
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <ToastProvider>
+          <SmartWalletsView initialWallets={mockTracked} initialCategory="tracked" />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/🚀 Early Buyers/);
+    expect(html).toMatch(/💎 &gt;\$10M Runners/);
+    expect(html).toMatch(/⚡ Snipers &amp; Alpha/);
+    expect(html).toMatch(/💰 Profitable/);
+    expect(html).toMatch(/📢 KOL \/ Callers/);
+  });
+
+  it('renders sniper tab with sniper badges and metrics', () => {
+    const mockSniperWallets = [
+      {
+        address: 'H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4SEZ2v',
+        chain: 'solana',
+        category: 'sniper',
+        realizedProfitUsd: 15400,
+        winRatePct: 82.5,
+        profitableTrades: 10,
+        totalTrades: 12,
+        tokenNum: 12,
+        balanceUsd: 6200,
+        tags: ['sniper', 'madeonsol_sniper', 'rank_1_buyer', 'alpha_buyer', 'kol'],
+        flags: { is_sniper: true },
+      },
+    ];
+
+    const html = renderToString(
+      <MemoryRouter>
+        <ToastProvider>
+          <SmartWalletsView initialWallets={mockSniperWallets} initialCategory="sniper" />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/5\. Snipers &amp; Bundlers/);
+    expect(html).toMatch(/⚡ Sniper/);
+    expect(html).toMatch(/🎯 Rank 1 Buyer/);
+    expect(html).toMatch(/🚀 Alpha Early Buyer/);
+    expect(html).toMatch(/📢 KOL Caller/);
+    expect(html).toMatch(/\+\$15\.4k/);
+    expect(html).toMatch(/82\.5.*%/);
+  });
+
+  it('renders Pagination component with item counts and page size selector', () => {
+    const mockWallets = Array.from({ length: 80 }, (_, i) => ({
+      address: `So1111111111111111111111111111111111111111${i.toString().padStart(2, '0')}`,
+      chain: 'solana',
+      category: 'smart',
+      realizedProfitUsd: 1000 + i * 10,
+      winRatePct: 60,
+      openTrades: 5,
+    }));
+
+    const html = renderToString(
+      <MemoryRouter>
+        <ToastProvider>
+          <SmartWalletsView initialWallets={mockWallets} />
+        </ToastProvider>
+      </MemoryRouter>
+    );
+
+    expect(html).toMatch(/Showing.*1.*50.*of.*80/);
+    expect(html).toContain('Previous');
+    expect(html).toContain('Next');
+    expect(html).toMatch(/50.*\/ page/);
   });
 });
